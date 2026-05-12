@@ -43,7 +43,7 @@ export interface VocabNote {
 export interface Settings {
   geminiApiKey: string;
   targetLang: string;
-  triggerMethod: 'select' | 'double-click' | 'shortcut';
+  triggerMethod: 'select' | 'double-click';
   theme: 'light' | 'dark' | 'auto';
   popupEnabled: boolean;
 }

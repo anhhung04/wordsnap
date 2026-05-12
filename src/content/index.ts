@@ -21,7 +21,11 @@ async function init() {
   currentSettings = await sendMessage({ type: 'GET_SETTINGS' }) as Settings;
   if (!currentSettings?.popupEnabled) return;
 
-  document.addEventListener('mouseup', onMouseUp);
+  if (currentSettings.triggerMethod === 'double-click') {
+    document.addEventListener('dblclick', onDoubleClick);
+  } else {
+    document.addEventListener('mouseup', onMouseUp);
+  }
   document.addEventListener('keydown', onKeyDown);
 }
 
@@ -32,6 +36,23 @@ function onMouseUp(e: MouseEvent) {
 
   if (selectionTimeout) clearTimeout(selectionTimeout);
   selectionTimeout = setTimeout(() => handleSelection(e), 150);
+}
+
+function onDoubleClick(e: MouseEvent) {
+  // On double-click, skip the trigger icon and directly show popup
+  if (triggerEl?.contains(e.target as Node)) return;
+  if (popupEl?.contains(e.target as Node)) return;
+
+  const selection = window.getSelection();
+  const text = selection?.toString().trim();
+  if (!text || text.length < 1 || text.length > 500) return;
+  if (!selection || selection.rangeCount === 0) return;
+  if (isNonTranslatable(text)) return;
+
+  selectedText = text;
+  const range = selection.getRangeAt(0);
+  const rect = range.getBoundingClientRect();
+  showPopup(text, rect.right, rect.top);
 }
 
 function onKeyDown(e: KeyboardEvent) {
@@ -55,6 +76,12 @@ function handleSelection(_e: MouseEvent) {
     return;
   }
 
+  // Skip non-translatable content
+  if (isNonTranslatable(text)) {
+    hideTrigger();
+    return;
+  }
+
   selectedText = text;
 
   // Position based on the highlighted text bounds, not cursor
@@ -64,6 +91,21 @@ function handleSelection(_e: MouseEvent) {
   triggerX = rect.right;
   triggerY = rect.top;
   showTrigger(rect);
+}
+
+function isNonTranslatable(text: string): boolean {
+  // URLs
+  if (/^https?:\/\/\S+$/i.test(text)) return true;
+  // Email addresses
+  if (/^[\w.+-]+@[\w-]+\.[\w.-]+$/.test(text)) return true;
+  // Pure numbers / dates
+  if (/^[\d\s.,/:%-]+$/.test(text)) return true;
+  // Code-like content (has lots of special chars)
+  const specialRatio = (text.match(/[{}()[\];=<>|&^~`$#@!]/g) || []).length / text.length;
+  if (specialRatio > 0.15) return true;
+  // File paths
+  if (/^[\/\\]?[\w.-]+([\/\\][\w.-]+)+$/.test(text)) return true;
+  return false;
 }
 
 // --- Trigger Icon ---
@@ -150,15 +192,28 @@ function createTrigger() {
 
 // --- Translation Popup ---
 
+// Store position anchor so we can reposition after content loads
+let popupAnchorX = 0;
+let popupAnchorY = 0;
+
 function showPopup(text: string, x: number, y: number) {
   if (!popupEl) {
     createPopup();
   }
 
-  positionPopup(x, y);
+  popupAnchorX = x;
+  popupAnchorY = y;
   popupEl!.style.display = 'block';
+  positionPopup(x, y);
   renderLoading(text);
   fetchData(text);
+}
+
+function repositionPopup() {
+  // Re-run positioning with actual dimensions after content renders
+  if (popupEl && popupEl.style.display !== 'none') {
+    positionPopup(popupAnchorX, popupAnchorY);
+  }
 }
 
 function hidePopup() {
@@ -196,20 +251,34 @@ function createPopup() {
 function positionPopup(x: number, y: number) {
   if (!popupEl) return;
 
-  const margin = 10;
+  const margin = 8;
   const vw = window.innerWidth;
   const vh = window.innerHeight;
+
+  // Measure actual popup dimensions (use estimates if not yet rendered)
+  const popupRect = popupEl.getBoundingClientRect();
+  const pw = popupRect.width > 0 ? popupRect.width : 420;
+  const ph = popupRect.height > 0 ? popupRect.height : 300;
 
   let left = x + margin;
   let top = y + margin;
 
-  if (left + 420 > vw) left = x - 420 - margin;
-  if (top + 300 > vh) top = y - 300 - margin;
-  left = Math.max(margin, left);
-  top = Math.max(margin, top);
+  // Flip horizontally if overflows right edge
+  if (left + pw > vw - margin) {
+    left = x - pw - margin;
+  }
+  // Flip vertically if overflows bottom edge
+  if (top + ph > vh - margin) {
+    top = y - ph - margin;
+  }
+
+  // Clamp to viewport boundaries
+  left = Math.max(margin, Math.min(left, vw - pw - margin));
+  top = Math.max(margin, Math.min(top, vh - ph - margin));
 
   popupEl.style.left = `${left}px`;
   popupEl.style.top = `${top}px`;
+  popupEl.style.maxHeight = `${vh - margin * 2}px`;
 }
 
 function renderLoading(text: string) {
@@ -315,7 +384,18 @@ function renderResult(text: string, translation: unknown, dictionary: unknown, i
 
   // --- Translation section with TTS + copy ---
   let translationHtml = '';
-  if (t?.translated) {
+  const isSameLang = t?.sourceLang && currentSettings?.targetLang
+    && t.sourceLang.toLowerCase() === currentSettings.targetLang.toLowerCase();
+
+  if (isSameLang && t?.translated) {
+    // Same language detected - show dictionary info without translation
+    translationHtml = `
+      <div class="section same-lang-notice">
+        <span class="lang-badge">${t.sourceLang!.toUpperCase()}</span>
+        <span class="same-lang-text">Already in your target language</span>
+      </div>
+    `;
+  } else if (t?.translated) {
     const langBadge = t.sourceLang && t.sourceLang !== 'und'
       ? `<span class="lang-badge">${t.sourceLang.toUpperCase()} > ${currentSettings?.targetLang?.toUpperCase() || 'VI'}</span>`
       : '';
@@ -500,9 +580,13 @@ function renderResult(text: string, translation: unknown, dictionary: unknown, i
         const hidden = el.style.display === 'none';
         el.style.display = hidden ? 'block' : 'none';
         (btn as HTMLElement).textContent = hidden ? 'Show less' : btn.textContent || '';
+        repositionPopup();
       }
     });
   });
+
+  // Reposition now that content is rendered with actual dimensions
+  requestAnimationFrame(repositionPopup);
 }
 
 async function saveWord(word: string, translation: string) {
@@ -592,6 +676,9 @@ function getStyles(): string {
       line-height: 1.5;
       color: var(--color-text);
       overflow: hidden;
+      max-height: calc(100vh - 16px);
+      display: flex;
+      flex-direction: column;
       animation: popupIn 200ms cubic-bezier(0.16, 1, 0.3, 1);
     }
     @keyframes popupIn {
@@ -627,8 +714,10 @@ function getStyles(): string {
     .popup-close:hover { background: var(--color-border); color: var(--color-text); }
     .popup-body {
       padding: 14px;
-      max-height: 420px;
       overflow-y: auto;
+      overscroll-behavior: contain;
+      flex: 1;
+      min-height: 0;
     }
     .popup-body::-webkit-scrollbar { width: 4px; }
     .popup-body::-webkit-scrollbar-track { background: transparent; }
@@ -874,9 +963,24 @@ function getStyles(): string {
       letter-spacing: 0.03em;
       vertical-align: middle;
     }
+    .same-lang-notice {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 12px;
+      background: var(--color-surface);
+      border-radius: 6px;
+      border: 1px solid var(--color-border);
+    }
+    .same-lang-notice .lang-badge { margin-left: 0; }
+    .same-lang-text {
+      font-size: 13px;
+      color: var(--color-text-muted);
+      font-style: italic;
+    }
 
     @media (prefers-color-scheme: dark) {
-      :host {
+      :host(:not(.theme-light)) {
         --color-bg: #1e293b;
         --color-surface: #0f172a;
         --color-text: #f1f5f9;
@@ -887,14 +991,32 @@ function getStyles(): string {
         --color-primary-hover: #3b82f6;
         --shadow: 0 8px 32px rgba(0,0,0,0.4), 0 2px 8px rgba(0,0,0,0.3);
       }
-      .popup-container { border-color: #475569; }
-      .error { background: #450a0a; border-color: #991b1b; color: #fca5a5; }
-      .pos { background: #334155; border-color: #475569; color: #94a3b8; }
-      .save-btn { background: #3b82f6; }
-      .save-btn:hover { background: #2563eb; }
-      .save-btn:disabled { background: #1e40af; opacity: 0.6; }
-      .alt-chip { background: #1e3a5f; border-color: #2563eb; color: #93c5fd; }
+      :host(:not(.theme-light)) .popup-container { border-color: #475569; }
+      :host(:not(.theme-light)) .error { background: #450a0a; border-color: #991b1b; color: #fca5a5; }
+      :host(:not(.theme-light)) .pos { background: #334155; border-color: #475569; color: #94a3b8; }
+      :host(:not(.theme-light)) .save-btn { background: #3b82f6; }
+      :host(:not(.theme-light)) .save-btn:hover { background: #2563eb; }
+      :host(:not(.theme-light)) .save-btn:disabled { background: #1e40af; opacity: 0.6; }
+      :host(:not(.theme-light)) .alt-chip { background: #1e3a5f; border-color: #2563eb; color: #93c5fd; }
     }
+    :host(.theme-dark) {
+      --color-bg: #1e293b;
+      --color-surface: #0f172a;
+      --color-text: #f1f5f9;
+      --color-text-secondary: #94a3b8;
+      --color-text-muted: #64748b;
+      --color-border: #334155;
+      --color-primary: #60a5fa;
+      --color-primary-hover: #3b82f6;
+      --shadow: 0 8px 32px rgba(0,0,0,0.4), 0 2px 8px rgba(0,0,0,0.3);
+    }
+    :host(.theme-dark) .popup-container { border-color: #475569; }
+    :host(.theme-dark) .error { background: #450a0a; border-color: #991b1b; color: #fca5a5; }
+    :host(.theme-dark) .pos { background: #334155; border-color: #475569; color: #94a3b8; }
+    :host(.theme-dark) .save-btn { background: #3b82f6; }
+    :host(.theme-dark) .save-btn:hover { background: #2563eb; }
+    :host(.theme-dark) .save-btn:disabled { background: #1e40af; opacity: 0.6; }
+    :host(.theme-dark) .alt-chip { background: #1e3a5f; border-color: #2563eb; color: #93c5fd; }
 
     @media (prefers-reduced-motion: reduce) {
       .popup-container { animation: none; }

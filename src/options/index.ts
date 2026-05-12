@@ -38,7 +38,7 @@ async function loadSettings() {
 function validateSettings(): string | null {
   const targetLang = targetLangSelect.value;
   if (!targetLang || targetLang.length < 2) return 'Invalid target language';
-  const validTriggers = ['select', 'double-click', 'shortcut'];
+  const validTriggers = ['select', 'double-click'];
   if (!validTriggers.includes(triggerMethodSelect.value)) return 'Invalid trigger method';
   const validThemes = ['light', 'dark', 'auto'];
   if (!validThemes.includes(themeSelect.value)) return 'Invalid theme';
