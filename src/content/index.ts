@@ -235,13 +235,14 @@ function renderLoading(text: string) {
 async function fetchData(text: string) {
   const requestId = ++currentRequestId;
   const wordCount = text.split(/\s+/).length;
+  const isSingleWord = wordCount === 1;
   const isWord = wordCount <= 2;
   const isPhrase = wordCount <= 6;
 
-  // Fetch Google Translate (primary) + dictionary for words/short phrases
+  // Fetch Google Translate (primary) + dictionary for single words only
   const [translationRes, dictionaryRes] = await Promise.allSettled([
     sendMessage({ type: 'TRANSLATE', text }),
-    isWord ? sendMessage({ type: 'LOOKUP_DICTIONARY', word: text }) : Promise.resolve(null),
+    isSingleWord ? sendMessage({ type: 'LOOKUP_DICTIONARY', word: text }) : Promise.resolve(null),
   ]);
 
   // Discard stale response if user selected new text
@@ -276,10 +277,13 @@ async function loadAiEnhancement(text: string, isWord: boolean, isPhrase: boolea
       aiSection.classList.remove('loading-ai');
     }
   } catch {
-    // AI not available - silently remove loading hint
+    // AI not available - show subtle message instead of removing
     if (requestId !== currentRequestId) return;
     const aiSection = shadowRoot?.querySelector('.ai-section');
-    if (aiSection) aiSection.remove();
+    if (aiSection) {
+      aiSection.innerHTML = `<div class="ai-unavailable">AI analysis unavailable</div>`;
+      aiSection.classList.remove('loading-ai');
+    }
   }
 }
 
@@ -309,23 +313,28 @@ function renderResult(text: string, translation: unknown, dictionary: unknown, i
     ).join(' ')}</div>`;
   }
 
-  // --- Translation section with detected language badge ---
+  // --- Translation section with TTS + copy ---
   let translationHtml = '';
-  if (t) {
+  if (t?.translated) {
     const langBadge = t.sourceLang && t.sourceLang !== 'und'
-      ? `<span class="lang-badge">${t.sourceLang.toUpperCase()} → ${currentSettings?.targetLang?.toUpperCase() || 'VI'}</span>`
+      ? `<span class="lang-badge">${t.sourceLang.toUpperCase()} > ${currentSettings?.targetLang?.toUpperCase() || 'VI'}</span>`
       : '';
+    const ttsBtn = `<button class="tts-btn" data-text="${escapeHtml(t.translated)}" data-lang="${currentSettings?.targetLang || 'vi'}" title="Listen" aria-label="Listen to translation"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M15.54 8.46a5 5 0 010 7.07"/><path d="M19.07 4.93a10 10 0 010 14.14"/></svg></button>`;
+    const copyBtn = `<button class="copy-btn" data-text="${escapeHtml(t.translated)}" title="Copy" aria-label="Copy translation"><svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg></button>`;
     translationHtml = `
       <div class="section translation">
         <div class="section-title">Translation ${langBadge}</div>
-        <div class="translated-text">${escapeHtml(t.translated || '')}</div>
+        <div class="translation-row">
+          <div class="translated-text">${escapeHtml(t.translated)}</div>
+          <div class="translation-actions">${ttsBtn}${copyBtn}</div>
+        </div>
       </div>
     `;
   } else {
     translationHtml = `<div class="section error"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" style="display:inline;vertical-align:-2px;margin-right:4px"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>Translation failed. Check your internet connection.</div>`;
   }
 
-  // --- Alternatives / Other meanings (for words) ---
+  // --- Alternatives (for words) ---
   let alternativesHtml = '';
   if (t?.alternatives?.length && isWord) {
     alternativesHtml = `
@@ -336,18 +345,27 @@ function renderResult(text: string, translation: unknown, dictionary: unknown, i
     `;
   }
 
-  // --- Definitions by POS (for words from Google Translate) ---
+  // --- Definitions (collapsible if >3) ---
   let definitionsHtml = '';
   if (t?.definitions?.length && isWord) {
+    const defs = t.definitions;
+    const visibleDefs = defs.slice(0, 3);
+    const hiddenDefs = defs.slice(3);
     definitionsHtml = `
       <div class="section gt-definitions">
         <div class="section-title">Definitions</div>
-        ${t.definitions.slice(0, 4).map((def) => `
+        ${visibleDefs.map((def) => `
           <div class="gt-def-entry">
             <span class="pos">${escapeHtml(def.pos)}</span>
             <span class="gt-meanings">${def.meanings.slice(0, 4).map((m) => escapeHtml(m)).join(', ')}</span>
           </div>
         `).join('')}
+        ${hiddenDefs.length ? `
+          <div class="defs-collapsed" style="display:none">
+            ${hiddenDefs.map((def) => `<div class="gt-def-entry"><span class="pos">${escapeHtml(def.pos)}</span><span class="gt-meanings">${def.meanings.slice(0, 4).map((m) => escapeHtml(m)).join(', ')}</span></div>`).join('')}
+          </div>
+          <button class="expand-btn" data-target="defs-collapsed">+${hiddenDefs.length} more</button>
+        ` : ''}
       </div>
     `;
   }
@@ -363,7 +381,7 @@ function renderResult(text: string, translation: unknown, dictionary: unknown, i
     `;
   }
 
-  // --- Examples (for words/phrases) ---
+  // --- Examples (words/phrases) ---
   let examplesHtml = '';
   if (t?.examples?.length && (isWord || isPhrase)) {
     examplesHtml = `
@@ -374,19 +392,27 @@ function renderResult(text: string, translation: unknown, dictionary: unknown, i
     `;
   }
 
-  // --- Cambridge Dictionary (for words) ---
+  // --- Cambridge Dictionary (single words, collapsible) ---
   let dictionaryHtml = '';
   if (d?.found && d.definitions?.length) {
+    const visibleCam = d.definitions.slice(0, 2);
+    const hiddenCam = d.definitions.slice(2);
     dictionaryHtml = `
       <div class="section dictionary">
         <div class="section-title">Cambridge Dictionary</div>
-        ${d.definitions.slice(0, 3).map((def) => `
+        ${visibleCam.map((def) => `
           <div class="def-entry">
             <span class="pos">${escapeHtml(def.partOfSpeech)}</span>
             <span class="meaning">${escapeHtml(def.meaning)}</span>
             ${def.examples.length ? `<div class="def-examples">${def.examples.map((ex) => `<div class="def-example">"${escapeHtml(ex)}"</div>`).join('')}</div>` : ''}
           </div>
         `).join('')}
+        ${hiddenCam.length ? `
+          <div class="cam-collapsed" style="display:none">
+            ${hiddenCam.map((def) => `<div class="def-entry"><span class="pos">${escapeHtml(def.partOfSpeech)}</span><span class="meaning">${escapeHtml(def.meaning)}</span></div>`).join('')}
+          </div>
+          <button class="expand-btn" data-target="cam-collapsed">+${hiddenCam.length} more</button>
+        ` : ''}
       </div>
     `;
   }
@@ -394,22 +420,23 @@ function renderResult(text: string, translation: unknown, dictionary: unknown, i
   // --- AI section placeholder (lazy-loaded) ---
   const aiHtml = `<div class="section ai-section loading-ai"><div class="ai-loading-hint"><svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" style="display:inline;vertical-align:-1px;margin-right:4px"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg>Loading AI analysis...</div></div>`;
 
-  // --- For paragraphs, show word count info ---
+  // --- Meta info for long text ---
   let metaHtml = '';
   if (!isWord && !isPhrase) {
-    const wordCount = text.split(/\s+/).length;
-    const sentenceCount = text.split(/[.!?]+/).filter(Boolean).length;
-    metaHtml = `<div class="section meta-info"><span class="meta-badge">${wordCount} words</span><span class="meta-badge">${sentenceCount} sentence${sentenceCount > 1 ? 's' : ''}</span></div>`;
+    const wc = text.split(/\s+/).length;
+    const sc = text.split(/[.!?]+/).filter(Boolean).length;
+    metaHtml = `<div class="section meta-info"><span class="meta-badge">${wc} words</span><span class="meta-badge">${sc} sentence${sc > 1 ? 's' : ''}</span></div>`;
   }
 
-  // --- Header: truncate long text ---
+  // --- Header with tooltip for full text ---
   const displayText = text.length > 60 ? text.substring(0, 57) + '...' : text;
+  const titleAttr = text.length > 60 ? ` title="${escapeHtml(text.substring(0, 200))}"` : '';
 
   shadowRoot.innerHTML = `
     <style>${getStyles()}</style>
     <div class="popup-container">
       <div class="popup-header">
-        <span class="popup-word">${escapeHtml(displayText)}</span>
+        <span class="popup-word"${titleAttr}>${escapeHtml(displayText)}</span>
         ${phoneticsHtml}
         <button class="popup-close" title="Close" aria-label="Close"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
       </div>
@@ -431,13 +458,49 @@ function renderResult(text: string, translation: unknown, dictionary: unknown, i
 
   // Event listeners
   shadowRoot.querySelector('.popup-close')?.addEventListener('click', hidePopup);
-  shadowRoot.querySelector('.save-btn')?.addEventListener('click', () => {
-    saveWord(text, t?.translated || '');
-  });
+  shadowRoot.querySelector('.save-btn')?.addEventListener('click', () => saveWord(text, t?.translated || ''));
   shadowRoot.querySelectorAll('.audio-btn').forEach((btn) => {
     btn.addEventListener('click', () => {
       const url = (btn as HTMLElement).dataset.url;
       if (url) new Audio(url).play();
+    });
+  });
+  // TTS - browser speech synthesis for translation
+  shadowRoot.querySelectorAll('.tts-btn').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const ttsText = (btn as HTMLElement).dataset.text;
+      const lang = (btn as HTMLElement).dataset.lang || 'vi';
+      if (ttsText && window.speechSynthesis) {
+        window.speechSynthesis.cancel();
+        const u = new SpeechSynthesisUtterance(ttsText);
+        u.lang = lang;
+        u.rate = 0.9;
+        window.speechSynthesis.speak(u);
+      }
+    });
+  });
+  // Copy translation to clipboard
+  shadowRoot.querySelectorAll('.copy-btn').forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      const copyText = (btn as HTMLElement).dataset.text;
+      if (copyText) {
+        await navigator.clipboard.writeText(copyText);
+        (btn as HTMLElement).classList.add('copied');
+        setTimeout(() => (btn as HTMLElement).classList.remove('copied'), 1500);
+      }
+    });
+  });
+  // Expand/collapse sections
+  shadowRoot.querySelectorAll('.expand-btn').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const target = (btn as HTMLElement).dataset.target;
+      if (!target || !shadowRoot) return;
+      const el = shadowRoot.querySelector(`.${target}`) as HTMLElement;
+      if (el) {
+        const hidden = el.style.display === 'none';
+        el.style.display = hidden ? 'block' : 'none';
+        (btn as HTMLElement).textContent = hidden ? 'Show less' : btn.textContent || '';
+      }
     });
   });
 }
@@ -705,6 +768,11 @@ function getStyles(): string {
     }
     .loading-ai .ai-loading-hint { display: block; }
     .ai-section:empty { display: none; }
+    .ai-unavailable {
+      font-size: 12px;
+      color: var(--color-text-muted);
+      font-style: italic;
+    }
     .ai-details { margin-top: 6px; }
     .ai-detail-item {
       font-size: 13px;
@@ -714,6 +782,49 @@ function getStyles(): string {
       border-left: 2px solid var(--color-border);
       margin-bottom: 4px;
     }
+    .translation-row {
+      display: flex;
+      align-items: flex-start;
+      gap: 8px;
+    }
+    .translation-row .translated-text { flex: 1; }
+    .translation-actions {
+      display: flex;
+      gap: 4px;
+      flex-shrink: 0;
+      padding-top: 2px;
+    }
+    .tts-btn, .copy-btn {
+      background: none;
+      border: 1px solid var(--color-border);
+      cursor: pointer;
+      padding: 4px 6px;
+      border-radius: 5px;
+      color: var(--color-text-muted);
+      transition: all var(--transition);
+      line-height: 1;
+    }
+    .tts-btn:hover, .copy-btn:hover {
+      background: var(--color-surface);
+      color: var(--color-primary);
+      border-color: var(--color-primary);
+    }
+    .copy-btn.copied {
+      background: var(--color-success);
+      border-color: var(--color-success);
+      color: white;
+    }
+    .expand-btn {
+      background: none;
+      border: none;
+      color: var(--color-primary);
+      font-size: 12px;
+      cursor: pointer;
+      padding: 4px 0;
+      font-weight: 500;
+      transition: opacity var(--transition);
+    }
+    .expand-btn:hover { opacity: 0.7; }
     .alt-list, .syn-list {
       display: flex;
       flex-wrap: wrap;
