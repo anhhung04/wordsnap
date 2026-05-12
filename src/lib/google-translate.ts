@@ -156,12 +156,12 @@ function extractRaw(data: unknown[]): GoogleTranslateRaw {
       if (Array.isArray(group) && Array.isArray(group[1])) {
         for (const synGroup of group[1] as unknown[][]) {
           if (Array.isArray(synGroup) && Array.isArray(synGroup[0])) {
-            result.synonyms.push(...(synGroup[0] as string[]).slice(0, 3));
+            result.synonyms.push(...(synGroup[0] as string[]).slice(0, 4));
           }
         }
       }
     }
-    result.synonyms = result.synonyms.slice(0, 5);
+    result.synonyms = result.synonyms.slice(0, 8);
   }
 
   return result;

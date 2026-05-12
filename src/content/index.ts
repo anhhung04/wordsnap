@@ -388,12 +388,28 @@ function renderResult(text: string, translation: unknown, dictionary: unknown, i
     definitions?: { partOfSpeech: string; meaning: string; examples: string[] }[];
   } | null;
 
-  // --- Header info (phonetics for words) ---
+  // --- Header info (IPA + word class for words) ---
   let phoneticsHtml = '';
   if (d?.found && d.phonetics?.length) {
     phoneticsHtml = `<div class="phonetics">${d.phonetics.map((p) =>
       `<span class="ipa">${escapeHtml(p.ipa)}</span>${p.audioUrl ? `<button class="audio-btn" data-url="${p.audioUrl}" title="Play pronunciation" aria-label="Play pronunciation"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M15.54 8.46a5 5 0 010 7.07"/></svg></button>` : ''}`
     ).join(' ')}</div>`;
+  }
+
+  // Word class badges (noun, verb, adj, etc.) from GT definitions or Cambridge
+  let wordClassHtml = '';
+  if (isWord) {
+    const posSet = new Set<string>();
+    if (t?.definitions?.length) {
+      t.definitions.forEach((def) => posSet.add(def.pos.toLowerCase()));
+    } else if (d?.found && d.definitions?.length) {
+      d.definitions.forEach((def) => posSet.add(def.partOfSpeech.toLowerCase()));
+    }
+    if (posSet.size > 0) {
+      wordClassHtml = `<div class="word-classes">${[...posSet].map((pos) =>
+        `<span class="word-class-badge">${escapeHtml(pos)}</span>`
+      ).join('')}</div>`;
+    }
   }
 
   // --- Translation section with TTS + copy ---
@@ -464,9 +480,9 @@ function renderResult(text: string, translation: unknown, dictionary: unknown, i
     `;
   }
 
-  // --- Synonyms (for words) ---
+  // --- Synonyms (for words and short phrases) ---
   let synonymsHtml = '';
-  if (t?.synonyms?.length && isWord) {
+  if (t?.synonyms?.length && (isWord || isPhrase)) {
     synonymsHtml = `
       <div class="section synonyms">
         <div class="section-title">Synonyms</div>
@@ -530,10 +546,13 @@ function renderResult(text: string, translation: unknown, dictionary: unknown, i
     <style>${getStyles()}</style>
     <div class="popup-container">
       <div class="popup-header">
-        <span class="popup-word"${titleAttr}>${escapeHtml(displayText)}</span>
-        ${phoneticsHtml}
+        <div class="popup-header-left">
+          <span class="popup-word"${titleAttr}>${escapeHtml(displayText)}</span>
+          ${phoneticsHtml}
+        </div>
         <button class="popup-close" title="Close" aria-label="Close"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
       </div>
+      ${wordClassHtml}
       <div class="popup-body">
         ${metaHtml}
         ${translationHtml}
@@ -707,12 +726,39 @@ function getStyles(): string {
       border-bottom: 1px solid var(--color-border);
       background: var(--color-surface);
     }
+    .popup-header-left {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex: 1;
+      min-width: 0;
+    }
     .popup-word {
       font-weight: 600;
       font-size: 15px;
       color: var(--color-primary);
-      flex: 1;
       letter-spacing: -0.01em;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .word-classes {
+      display: flex;
+      gap: 6px;
+      padding: 6px 14px;
+      background: var(--color-surface);
+      border-bottom: 1px solid var(--color-border);
+      flex-wrap: wrap;
+    }
+    .word-class-badge {
+      font-size: 11px;
+      font-weight: 600;
+      padding: 2px 8px;
+      border-radius: 4px;
+      background: #eff6ff;
+      border: 1px solid #bfdbfe;
+      color: #1d4ed8;
+      text-transform: lowercase;
     }
     .popup-close {
       background: none;
@@ -1012,6 +1058,7 @@ function getStyles(): string {
       :host(:not(.theme-light)) .save-btn:hover { background: #2563eb; }
       :host(:not(.theme-light)) .save-btn:disabled { background: #1e40af; opacity: 0.6; }
       :host(:not(.theme-light)) .alt-chip { background: #1e3a5f; border-color: #2563eb; color: #93c5fd; }
+      :host(:not(.theme-light)) .word-class-badge { background: #1e3a5f; border-color: #2563eb; color: #93c5fd; }
     }
     :host(.theme-dark) {
       --color-bg: #1e293b;
@@ -1031,6 +1078,7 @@ function getStyles(): string {
     :host(.theme-dark) .save-btn:hover { background: #2563eb; }
     :host(.theme-dark) .save-btn:disabled { background: #1e40af; opacity: 0.6; }
     :host(.theme-dark) .alt-chip { background: #1e3a5f; border-color: #2563eb; color: #93c5fd; }
+    :host(.theme-dark) .word-class-badge { background: #1e3a5f; border-color: #2563eb; color: #93c5fd; }
 
     @media (prefers-reduced-motion: reduce) {
       .popup-container { animation: none; }
