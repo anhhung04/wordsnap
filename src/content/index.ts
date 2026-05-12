@@ -104,7 +104,7 @@ function isNonTranslatable(text: string): boolean {
   const specialRatio = (text.match(/[{}()[\];=<>|&^~`$#@!]/g) || []).length / text.length;
   if (specialRatio > 0.15) return true;
   // File paths
-  if (/^[\/\\]?[\w.-]+([\/\\][\w.-]+)+$/.test(text)) return true;
+  if (/^[/\\]?[\w.-]+([/\\][\w.-]+)+$/.test(text)) return true;
   return false;
 }
 
@@ -201,12 +201,26 @@ function showPopup(text: string, x: number, y: number) {
     createPopup();
   }
 
+  // Apply theme class to shadow host
+  applyThemeClass();
+
   popupAnchorX = x;
   popupAnchorY = y;
   popupEl!.style.display = 'block';
   positionPopup(x, y);
   renderLoading(text);
   fetchData(text);
+}
+
+function applyThemeClass() {
+  if (!popupEl || !currentSettings) return;
+  popupEl.classList.remove('theme-light', 'theme-dark');
+  if (currentSettings.theme === 'light') {
+    popupEl.classList.add('theme-light');
+  } else if (currentSettings.theme === 'dark') {
+    popupEl.classList.add('theme-dark');
+  }
+  // 'auto' uses the @media query fallback (no class needed)
 }
 
 function repositionPopup() {
@@ -399,7 +413,7 @@ function renderResult(text: string, translation: unknown, dictionary: unknown, i
     const langBadge = t.sourceLang && t.sourceLang !== 'und'
       ? `<span class="lang-badge">${t.sourceLang.toUpperCase()} > ${currentSettings?.targetLang?.toUpperCase() || 'VI'}</span>`
       : '';
-    const ttsBtn = `<button class="tts-btn" data-text="${escapeHtml(t.translated)}" data-lang="${currentSettings?.targetLang || 'vi'}" title="Listen" aria-label="Listen to translation"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M15.54 8.46a5 5 0 010 7.07"/><path d="M19.07 4.93a10 10 0 010 14.14"/></svg></button>`;
+    const ttsBtn = `<button class="tts-btn" data-text="${escapeHtml(text)}" data-lang="${t.sourceLang || 'en'}" title="Listen to original" aria-label="Listen to original text"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M15.54 8.46a5 5 0 010 7.07"/><path d="M19.07 4.93a10 10 0 010 14.14"/></svg></button>`;
     const copyBtn = `<button class="copy-btn" data-text="${escapeHtml(t.translated)}" title="Copy" aria-label="Copy translation"><svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg></button>`;
     translationHtml = `
       <div class="section translation">

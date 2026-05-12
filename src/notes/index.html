@@ -222,9 +222,145 @@
     .count {
       font-size: 13px;
       color: var(--color-text-muted);
-      margin-bottom: 12px;
       font-weight: 500;
     }
+    .toolbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 12px;
+      gap: 8px;
+    }
+    .toolbar-right {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .toolbar-right select {
+      padding: 6px 10px;
+      border: 1px solid var(--color-border);
+      border-radius: var(--radius-sm);
+      font-size: 12px;
+      font-family: var(--font);
+      color: var(--color-text-secondary);
+      background: var(--color-surface);
+      cursor: pointer;
+      outline: none;
+      transition: border-color var(--transition);
+    }
+    .toolbar-right select:focus { border-color: var(--color-primary); }
+    .btn-review {
+      display: flex;
+      align-items: center;
+      gap: 5px;
+      background: var(--color-primary);
+      color: white;
+      font-size: 12px;
+      padding: 6px 12px;
+    }
+    .btn-review:hover { background: var(--color-primary-hover); }
+    .btn-review:disabled { opacity: 0.5; cursor: default; }
+
+    /* Flashcard review overlay */
+    .review-overlay {
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,0.5);
+      z-index: 1000;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 20px;
+    }
+    .review-modal {
+      background: var(--color-surface);
+      border-radius: var(--radius-lg);
+      box-shadow: 0 16px 48px rgba(0,0,0,0.2);
+      width: 100%;
+      max-width: 440px;
+      padding: 24px;
+      animation: slideUp 250ms cubic-bezier(0.16, 1, 0.3, 1);
+    }
+    @keyframes slideUp {
+      from { opacity: 0; transform: translateY(16px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+    .review-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 20px;
+    }
+    .review-progress {
+      font-size: 13px;
+      color: var(--color-text-muted);
+      font-weight: 500;
+    }
+    .review-close {
+      background: none;
+      font-size: 22px;
+      color: var(--color-text-muted);
+      padding: 4px 8px;
+      line-height: 1;
+    }
+    .review-close:hover { color: var(--color-text); }
+    .review-card {
+      text-align: center;
+      min-height: 160px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+    }
+    .review-word {
+      font-size: 28px;
+      font-weight: 700;
+      color: var(--color-primary);
+      margin-bottom: 12px;
+      letter-spacing: -0.02em;
+    }
+    .review-answer { width: 100%; }
+    .review-translation {
+      font-size: 18px;
+      color: var(--color-text);
+      font-weight: 500;
+      margin-bottom: 8px;
+    }
+    .review-context {
+      font-size: 13px;
+      color: var(--color-text-secondary);
+      font-style: italic;
+      max-width: 360px;
+      margin: 0 auto;
+    }
+    .review-actions, .review-nav {
+      display: flex;
+      justify-content: center;
+      gap: 10px;
+      margin-top: 20px;
+    }
+    .btn-reveal {
+      background: var(--color-primary);
+      color: white;
+      padding: 10px 24px;
+      font-size: 14px;
+    }
+    .btn-reveal:hover { background: var(--color-primary-hover); }
+    .btn-know {
+      background: #16a34a;
+      color: white;
+      padding: 10px 20px;
+      font-size: 13px;
+    }
+    .btn-know:hover { background: #15803d; }
+    .btn-next {
+      background: var(--color-primary-light);
+      color: var(--color-primary);
+      border: 1px solid var(--color-primary);
+      padding: 10px 20px;
+      font-size: 13px;
+    }
+    .btn-next:hover { background: #dbeafe; }
 
     @media (prefers-color-scheme: dark) {
       :root {
@@ -238,6 +374,9 @@
       }
       .search-bar input { background: #0f172a; }
       .btn-delete:hover { background: #450a0a; }
+      .toolbar-right select { background: #0f172a; color: #94a3b8; }
+      .review-modal { background: #1e293b; }
+      .btn-next { background: #1e3a5f; border-color: #3b82f6; }
     }
 
     @media (max-width: 600px) {
@@ -273,8 +412,47 @@
       <input type="text" id="searchInput" placeholder="Search words, translations, or tags...">
     </div>
 
-    <div class="count" id="count"></div>
+    <div class="toolbar">
+      <div class="count" id="count"></div>
+      <div class="toolbar-right">
+        <select id="sortSelect" aria-label="Sort notes">
+          <option value="newest">Newest first</option>
+          <option value="oldest">Oldest first</option>
+          <option value="az">A - Z</option>
+          <option value="za">Z - A</option>
+        </select>
+        <button class="btn-review" id="reviewBtn" title="Review words as flashcards">
+          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8"/><path d="M12 17v4"/></svg>
+          Review
+        </button>
+      </div>
+    </div>
+
     <div class="notes-list" id="notesList"></div>
+
+    <!-- Flashcard review modal -->
+    <div class="review-overlay" id="reviewOverlay" style="display:none">
+      <div class="review-modal">
+        <div class="review-header">
+          <span class="review-progress" id="reviewProgress">1 / 10</span>
+          <button class="review-close" id="reviewClose" title="Close" aria-label="Close review">&times;</button>
+        </div>
+        <div class="review-card" id="reviewCard">
+          <div class="review-word" id="reviewWord"></div>
+          <div class="review-answer" id="reviewAnswer" style="display:none">
+            <div class="review-translation" id="reviewTranslation"></div>
+            <div class="review-context" id="reviewContext"></div>
+          </div>
+        </div>
+        <div class="review-actions" id="reviewActions">
+          <button class="btn-reveal" id="revealBtn">Show Answer</button>
+        </div>
+        <div class="review-nav" id="reviewNav" style="display:none">
+          <button class="btn-know" id="knowBtn">I know this</button>
+          <button class="btn-next" id="nextBtn">Next</button>
+        </div>
+      </div>
+    </div>
   </div>
 
   <script type="module" src="./index.ts"></script>

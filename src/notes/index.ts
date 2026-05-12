@@ -5,21 +5,65 @@ const notesList = document.getElementById('notesList') as HTMLElement;
 const countEl = document.getElementById('count') as HTMLElement;
 const exportJsonBtn = document.getElementById('exportJson') as HTMLButtonElement;
 const exportCsvBtn = document.getElementById('exportCsv') as HTMLButtonElement;
+const sortSelect = document.getElementById('sortSelect') as HTMLSelectElement;
+const reviewBtn = document.getElementById('reviewBtn') as HTMLButtonElement;
+
+// Review modal elements
+const reviewOverlay = document.getElementById('reviewOverlay') as HTMLElement;
+const reviewProgress = document.getElementById('reviewProgress') as HTMLElement;
+const reviewClose = document.getElementById('reviewClose') as HTMLButtonElement;
+const reviewWord = document.getElementById('reviewWord') as HTMLElement;
+const reviewTranslation = document.getElementById('reviewTranslation') as HTMLElement;
+const reviewContext = document.getElementById('reviewContext') as HTMLElement;
+const reviewAnswer = document.getElementById('reviewAnswer') as HTMLElement;
+const reviewActions = document.getElementById('reviewActions') as HTMLElement;
+const reviewNav = document.getElementById('reviewNav') as HTMLElement;
+const revealBtn = document.getElementById('revealBtn') as HTMLButtonElement;
+const knowBtn = document.getElementById('knowBtn') as HTMLButtonElement;
+const nextBtn = document.getElementById('nextBtn') as HTMLButtonElement;
 
 let debounceTimer: ReturnType<typeof setTimeout> | null = null;
+let allNotes: VocabNote[] = [];
+let currentSort: string = 'newest';
+
+// Flashcard state
+let reviewNotes: VocabNote[] = [];
+let reviewIndex = 0;
+let knownCount = 0;
 
 // Load notes
 async function loadNotes(query?: string) {
   try {
     const response = await chrome.runtime.sendMessage({ type: 'GET_NOTES', query });
     if (response?.success) {
-      renderNotes(response.data as VocabNote[]);
+      allNotes = response.data as VocabNote[];
+      renderNotes(sortNotes(allNotes));
     } else {
       showError(response?.error || 'Failed to load notes');
     }
   } catch (e) {
     showError((e as Error).message);
   }
+}
+
+function sortNotes(notes: VocabNote[]): VocabNote[] {
+  const sorted = [...notes];
+  switch (currentSort) {
+    case 'oldest':
+      sorted.sort((a, b) => a.createdAt - b.createdAt);
+      break;
+    case 'az':
+      sorted.sort((a, b) => a.word.toLowerCase().localeCompare(b.word.toLowerCase()));
+      break;
+    case 'za':
+      sorted.sort((a, b) => b.word.toLowerCase().localeCompare(a.word.toLowerCase()));
+      break;
+    case 'newest':
+    default:
+      sorted.sort((a, b) => b.createdAt - a.createdAt);
+      break;
+  }
+  return sorted;
 }
 
 function showError(message: string) {
@@ -31,7 +75,12 @@ function showError(message: string) {
 }
 
 function renderNotes(notes: VocabNote[]) {
-  countEl.textContent = `${notes.length} word${notes.length !== 1 ? 's' : ''} saved`;
+  // Stats
+  const total = notes.length;
+  const thisWeek = notes.filter((n) => n.createdAt > Date.now() - 7 * 24 * 60 * 60 * 1000).length;
+  countEl.textContent = `${total} word${total !== 1 ? 's' : ''} saved${thisWeek > 0 ? ` - ${thisWeek} this week` : ''}`;
+
+  reviewBtn.disabled = total === 0;
 
   if (notes.length === 0) {
     notesList.innerHTML = `
@@ -65,7 +114,13 @@ function renderNotes(notes: VocabNote[]) {
   `).join('');
 }
 
-// Event delegation for delete buttons (single listener on parent)
+// Sorting
+sortSelect.addEventListener('change', () => {
+  currentSort = sortSelect.value;
+  renderNotes(sortNotes(allNotes));
+});
+
+// Event delegation for delete buttons
 notesList.addEventListener('click', async (e) => {
   const btn = (e.target as HTMLElement).closest('.btn-delete') as HTMLElement | null;
   if (!btn) return;
@@ -73,16 +128,17 @@ notesList.addEventListener('click', async (e) => {
   const id = Number(btn.dataset.id);
   if (!id) return;
 
-  // Confirm before delete
   const card = btn.closest('.note-card') as HTMLElement;
   card.style.opacity = '0.5';
 
   try {
     await chrome.runtime.sendMessage({ type: 'DELETE_NOTE', id });
     card.remove();
-    // Update count
-    const remaining = notesList.querySelectorAll('.note-card').length;
-    countEl.textContent = `${remaining} word${remaining !== 1 ? 's' : ''} saved`;
+    allNotes = allNotes.filter((n) => n.id !== id);
+    const remaining = allNotes.length;
+    const thisWeek = allNotes.filter((n) => n.createdAt > Date.now() - 7 * 24 * 60 * 60 * 1000).length;
+    countEl.textContent = `${remaining} word${remaining !== 1 ? 's' : ''} saved${thisWeek > 0 ? ` - ${thisWeek} this week` : ''}`;
+    reviewBtn.disabled = remaining === 0;
     if (remaining === 0) loadNotes();
   } catch {
     card.style.opacity = '1';
@@ -95,6 +151,72 @@ searchInput.addEventListener('input', () => {
   debounceTimer = setTimeout(() => {
     loadNotes(searchInput.value.trim() || undefined);
   }, 300);
+});
+
+// --- Flashcard Review ---
+reviewBtn.addEventListener('click', startReview);
+reviewClose.addEventListener('click', closeReview);
+revealBtn.addEventListener('click', revealAnswer);
+knowBtn.addEventListener('click', () => advanceReview(true));
+nextBtn.addEventListener('click', () => advanceReview(false));
+
+function startReview() {
+  if (allNotes.length === 0) return;
+  // Shuffle and take up to 20 cards
+  reviewNotes = [...allNotes].sort(() => Math.random() - 0.5).slice(0, 20);
+  reviewIndex = 0;
+  knownCount = 0;
+  reviewOverlay.style.display = 'flex';
+  showReviewCard();
+}
+
+function closeReview() {
+  reviewOverlay.style.display = 'none';
+}
+
+function showReviewCard() {
+  const note = reviewNotes[reviewIndex];
+  reviewProgress.textContent = `${reviewIndex + 1} / ${reviewNotes.length}`;
+  reviewWord.textContent = note.word;
+  reviewTranslation.textContent = note.translation;
+  reviewContext.textContent = note.context ? `"${note.context.substring(0, 120)}"` : '';
+  reviewAnswer.style.display = 'none';
+  reviewActions.style.display = 'flex';
+  reviewNav.style.display = 'none';
+}
+
+function revealAnswer() {
+  reviewAnswer.style.display = 'block';
+  reviewActions.style.display = 'none';
+  reviewNav.style.display = 'flex';
+}
+
+function advanceReview(known: boolean) {
+  if (known) knownCount++;
+  reviewIndex++;
+
+  if (reviewIndex >= reviewNotes.length) {
+    // Show summary
+    const pct = Math.round((knownCount / reviewNotes.length) * 100);
+    reviewWord.textContent = `${pct}%`;
+    reviewWord.style.fontSize = '48px';
+    reviewTranslation.textContent = `You knew ${knownCount} of ${reviewNotes.length} words`;
+    reviewContext.textContent = '';
+    reviewAnswer.style.display = 'block';
+    reviewActions.style.display = 'none';
+    reviewNav.style.display = 'none';
+    reviewProgress.textContent = 'Done!';
+    // Reset font size after close
+    setTimeout(() => { reviewWord.style.fontSize = ''; }, 0);
+    return;
+  }
+
+  showReviewCard();
+}
+
+// Close review on Escape
+reviewOverlay.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') closeReview();
 });
 
 // Export
