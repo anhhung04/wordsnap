@@ -1,0 +1,24 @@
+# Dependencies
+node_modules/
+dist/
+
+# Local autopilot artifacts — do not commit
+verify.sh
+verify.ps1
+PROGRESS.md
+NOTES.md
+SCRATCH.md
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Environment
+.env
+.env.local

@@ -1,0 +1,796 @@
+import type { MessageType, Settings } from '@/lib/types';
+
+let triggerEl: HTMLElement | null = null;
+let popupEl: HTMLElement | null = null;
+let shadowRoot: ShadowRoot | null = null;
+let currentSettings: Settings | null = null;
+let selectedText = '';
+let triggerX = 0;
+let triggerY = 0;
+
+// Debounce timer
+let selectionTimeout: ReturnType<typeof setTimeout> | null = null;
+
+// Request tracking to prevent race conditions
+let currentRequestId = 0;
+
+// Clean translate icon (Lucide-style)
+const TRIGGER_ICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7V4h16v3"/><path d="M9 20h6"/><path d="M12 4v16"/></svg>`;
+
+async function init() {
+  currentSettings = await sendMessage({ type: 'GET_SETTINGS' }) as Settings;
+  if (!currentSettings?.popupEnabled) return;
+
+  document.addEventListener('mouseup', onMouseUp);
+  document.addEventListener('keydown', onKeyDown);
+}
+
+function onMouseUp(e: MouseEvent) {
+  // Ignore clicks inside our elements
+  if (triggerEl?.contains(e.target as Node)) return;
+  if (popupEl?.contains(e.target as Node)) return;
+
+  if (selectionTimeout) clearTimeout(selectionTimeout);
+  selectionTimeout = setTimeout(() => handleSelection(e), 150);
+}
+
+function onKeyDown(e: KeyboardEvent) {
+  if (e.key === 'Escape') {
+    hideTrigger();
+    hidePopup();
+  }
+}
+
+function handleSelection(_e: MouseEvent) {
+  const selection = window.getSelection();
+  const text = selection?.toString().trim();
+
+  if (!text || text.length < 1 || text.length > 500) {
+    hideTrigger();
+    return;
+  }
+
+  if (!selection || selection.rangeCount === 0) {
+    hideTrigger();
+    return;
+  }
+
+  selectedText = text;
+
+  // Position based on the highlighted text bounds, not cursor
+  const range = selection.getRangeAt(0);
+  const rect = range.getBoundingClientRect();
+
+  triggerX = rect.right;
+  triggerY = rect.top;
+  showTrigger(rect);
+}
+
+// --- Trigger Icon ---
+
+function showTrigger(rect: DOMRect) {
+  hidePopup();
+
+  if (!triggerEl) {
+    createTrigger();
+  }
+
+  // Position at top-right corner of the selection
+  const margin = 4;
+  const size = 32;
+  let left = rect.right + margin;
+  let top = rect.top - size / 2 + rect.height / 2;
+
+  // Prevent overflow right
+  if (left + size > window.innerWidth) {
+    left = rect.left - size - margin;
+  }
+  // Prevent overflow top/bottom
+  if (top < margin) top = margin;
+  if (top + size > window.innerHeight) top = window.innerHeight - size - margin;
+
+  triggerEl!.style.left = `${left}px`;
+  triggerEl!.style.top = `${top}px`;
+  triggerEl!.style.display = 'flex';
+}
+
+function hideTrigger() {
+  if (triggerEl) {
+    triggerEl.style.display = 'none';
+  }
+}
+
+function createTrigger() {
+  triggerEl = document.createElement('div');
+  triggerEl.id = 'wordsnap-trigger';
+  triggerEl.style.cssText = `
+    position: fixed;
+    z-index: 2147483647;
+    display: none;
+    width: 32px;
+    height: 32px;
+    border-radius: 8px;
+    background: #2563EB;
+    box-shadow: 0 2px 12px rgba(37,99,235,0.4), 0 1px 3px rgba(0,0,0,0.1);
+    cursor: pointer;
+    align-items: center;
+    justify-content: center;
+    transition: transform 150ms cubic-bezier(0.4,0,0.2,1), box-shadow 150ms cubic-bezier(0.4,0,0.2,1);
+  `;
+  triggerEl.innerHTML = TRIGGER_ICON_SVG;
+  triggerEl.title = 'Translate with WordSnap';
+  document.body.appendChild(triggerEl);
+
+  triggerEl.addEventListener('mouseenter', () => {
+    if (triggerEl) triggerEl.style.transform = 'scale(1.1)';
+    if (triggerEl) triggerEl.style.boxShadow = '0 4px 16px rgba(37,99,235,0.5), 0 2px 4px rgba(0,0,0,0.1)';
+  });
+  triggerEl.addEventListener('mouseleave', () => {
+    if (triggerEl) triggerEl.style.transform = 'scale(1)';
+    if (triggerEl) triggerEl.style.boxShadow = '0 2px 12px rgba(37,99,235,0.4), 0 1px 3px rgba(0,0,0,0.1)';
+  });
+  triggerEl.addEventListener('click', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    hideTrigger();
+    if (selectedText) {
+      showPopup(selectedText, triggerX, triggerY);
+    }
+  });
+
+  // Click outside to dismiss trigger
+  document.addEventListener('mousedown', (e) => {
+    if (triggerEl && !triggerEl.contains(e.target as Node) && triggerEl.style.display !== 'none') {
+      if (!popupEl?.contains(e.target as Node)) {
+        hideTrigger();
+      }
+    }
+  });
+}
+
+// --- Translation Popup ---
+
+function showPopup(text: string, x: number, y: number) {
+  if (!popupEl) {
+    createPopup();
+  }
+
+  positionPopup(x, y);
+  popupEl!.style.display = 'block';
+  renderLoading(text);
+  fetchData(text);
+}
+
+function hidePopup() {
+  if (popupEl) {
+    popupEl.style.display = 'none';
+  }
+}
+
+function createPopup() {
+  popupEl = document.createElement('div');
+  popupEl.id = 'wordsnap-popup';
+  popupEl.setAttribute('role', 'dialog');
+  popupEl.setAttribute('aria-label', 'Translation popup');
+  popupEl.style.cssText = `
+    position: fixed;
+    z-index: 2147483647;
+    display: none;
+    max-width: 420px;
+    min-width: 300px;
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  `;
+  shadowRoot = popupEl.attachShadow({ mode: 'closed' });
+  document.body.appendChild(popupEl);
+
+  // Click outside to dismiss
+  document.addEventListener('mousedown', (e) => {
+    if (popupEl && !popupEl.contains(e.target as Node) && popupEl.style.display !== 'none') {
+      if (!triggerEl?.contains(e.target as Node)) {
+        hidePopup();
+      }
+    }
+  });
+}
+
+function positionPopup(x: number, y: number) {
+  if (!popupEl) return;
+
+  const margin = 10;
+  const vw = window.innerWidth;
+  const vh = window.innerHeight;
+
+  let left = x + margin;
+  let top = y + margin;
+
+  if (left + 420 > vw) left = x - 420 - margin;
+  if (top + 300 > vh) top = y - 300 - margin;
+  left = Math.max(margin, left);
+  top = Math.max(margin, top);
+
+  popupEl.style.left = `${left}px`;
+  popupEl.style.top = `${top}px`;
+}
+
+function renderLoading(text: string) {
+  if (!shadowRoot) return;
+  shadowRoot.innerHTML = `
+    <style>${getStyles()}</style>
+    <div class="popup-container">
+      <div class="popup-header">
+        <span class="popup-word">${escapeHtml(text)}</span>
+        <button class="popup-close" title="Close" aria-label="Close"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+      </div>
+      <div class="popup-body">
+        <div class="loading">
+          <div class="spinner"></div>
+          <span>Translating...</span>
+        </div>
+      </div>
+    </div>
+  `;
+  shadowRoot.querySelector('.popup-close')?.addEventListener('click', hidePopup);
+}
+
+async function fetchData(text: string) {
+  const requestId = ++currentRequestId;
+  const wordCount = text.split(/\s+/).length;
+  const isWord = wordCount <= 2;
+  const isPhrase = wordCount <= 6;
+
+  // Fetch Google Translate (primary) + dictionary for words/short phrases
+  const [translationRes, dictionaryRes] = await Promise.allSettled([
+    sendMessage({ type: 'TRANSLATE', text }),
+    isWord ? sendMessage({ type: 'LOOKUP_DICTIONARY', word: text }) : Promise.resolve(null),
+  ]);
+
+  // Discard stale response if user selected new text
+  if (requestId !== currentRequestId) return;
+
+  const translation = translationRes.status === 'fulfilled' ? translationRes.value : null;
+  const dictionary = dictionaryRes.status === 'fulfilled' ? dictionaryRes.value : null;
+
+  renderResult(text, translation, dictionary, isWord, isPhrase);
+
+  // Lazy-load AI enhancement if API key is configured
+  loadAiEnhancement(text, isWord, isPhrase, requestId);
+}
+
+async function loadAiEnhancement(text: string, isWord: boolean, isPhrase: boolean, requestId: number) {
+  try {
+    const aiResult = await sendMessage({ type: 'TRANSLATE_AI', text });
+    // Discard if stale
+    if (requestId !== currentRequestId || !aiResult || !shadowRoot) return;
+
+    const ai = aiResult as { translated?: string; explanation?: string; examples?: string[] };
+    const aiSection = shadowRoot.querySelector('.ai-section');
+
+    if (aiSection && ai.translated) {
+      const titleLabel = isWord ? 'AI Word Analysis' : isPhrase ? 'AI Explanation' : 'AI Analysis';
+      aiSection.innerHTML = `
+        <div class="section-title"><svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" style="display:inline;vertical-align:-1px;margin-right:4px"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg>${titleLabel}</div>
+        <div class="translated-text">${escapeHtml(ai.translated)}</div>
+        ${ai.explanation ? `<div class="explanation">${escapeHtml(ai.explanation)}</div>` : ''}
+        ${ai.examples?.length ? `<div class="ai-details">${ai.examples.map((ex) => `<div class="ai-detail-item">${escapeHtml(ex)}</div>`).join('')}</div>` : ''}
+      `;
+      aiSection.classList.remove('loading-ai');
+    }
+  } catch {
+    // AI not available - silently remove loading hint
+    if (requestId !== currentRequestId) return;
+    const aiSection = shadowRoot?.querySelector('.ai-section');
+    if (aiSection) aiSection.remove();
+  }
+}
+
+function renderResult(text: string, translation: unknown, dictionary: unknown, isWord: boolean, isPhrase: boolean) {
+  if (!shadowRoot) return;
+
+  const t = translation as {
+    translated?: string;
+    type?: string;
+    sourceLang?: string;
+    alternatives?: string[];
+    definitions?: { pos: string; meanings: string[] }[];
+    examples?: string[];
+    synonyms?: string[];
+  } | null;
+  const d = dictionary as {
+    found?: boolean;
+    phonetics?: { ipa: string; audioUrl?: string }[];
+    definitions?: { partOfSpeech: string; meaning: string; examples: string[] }[];
+  } | null;
+
+  // --- Header info (phonetics for words) ---
+  let phoneticsHtml = '';
+  if (d?.found && d.phonetics?.length) {
+    phoneticsHtml = `<div class="phonetics">${d.phonetics.map((p) =>
+      `<span class="ipa">${escapeHtml(p.ipa)}</span>${p.audioUrl ? `<button class="audio-btn" data-url="${p.audioUrl}" title="Play pronunciation" aria-label="Play pronunciation"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M15.54 8.46a5 5 0 010 7.07"/></svg></button>` : ''}`
+    ).join(' ')}</div>`;
+  }
+
+  // --- Translation section with detected language badge ---
+  let translationHtml = '';
+  if (t) {
+    const langBadge = t.sourceLang && t.sourceLang !== 'und'
+      ? `<span class="lang-badge">${t.sourceLang.toUpperCase()} → ${currentSettings?.targetLang?.toUpperCase() || 'VI'}</span>`
+      : '';
+    translationHtml = `
+      <div class="section translation">
+        <div class="section-title">Translation ${langBadge}</div>
+        <div class="translated-text">${escapeHtml(t.translated || '')}</div>
+      </div>
+    `;
+  } else {
+    translationHtml = `<div class="section error"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" style="display:inline;vertical-align:-2px;margin-right:4px"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>Translation failed. Check your internet connection.</div>`;
+  }
+
+  // --- Alternatives / Other meanings (for words) ---
+  let alternativesHtml = '';
+  if (t?.alternatives?.length && isWord) {
+    alternativesHtml = `
+      <div class="section alternatives">
+        <div class="section-title">Other Meanings</div>
+        <div class="alt-list">${t.alternatives.map((a) => `<span class="alt-chip">${escapeHtml(a)}</span>`).join('')}</div>
+      </div>
+    `;
+  }
+
+  // --- Definitions by POS (for words from Google Translate) ---
+  let definitionsHtml = '';
+  if (t?.definitions?.length && isWord) {
+    definitionsHtml = `
+      <div class="section gt-definitions">
+        <div class="section-title">Definitions</div>
+        ${t.definitions.slice(0, 4).map((def) => `
+          <div class="gt-def-entry">
+            <span class="pos">${escapeHtml(def.pos)}</span>
+            <span class="gt-meanings">${def.meanings.slice(0, 4).map((m) => escapeHtml(m)).join(', ')}</span>
+          </div>
+        `).join('')}
+      </div>
+    `;
+  }
+
+  // --- Synonyms (for words) ---
+  let synonymsHtml = '';
+  if (t?.synonyms?.length && isWord) {
+    synonymsHtml = `
+      <div class="section synonyms">
+        <div class="section-title">Synonyms</div>
+        <div class="syn-list">${t.synonyms.map((s) => `<span class="syn-chip">${escapeHtml(s)}</span>`).join('')}</div>
+      </div>
+    `;
+  }
+
+  // --- Examples (for words/phrases) ---
+  let examplesHtml = '';
+  if (t?.examples?.length && (isWord || isPhrase)) {
+    examplesHtml = `
+      <div class="section examples-section">
+        <div class="section-title">Examples</div>
+        <div class="examples">${t.examples.map((ex) => `<div class="example">${escapeHtml(ex)}</div>`).join('')}</div>
+      </div>
+    `;
+  }
+
+  // --- Cambridge Dictionary (for words) ---
+  let dictionaryHtml = '';
+  if (d?.found && d.definitions?.length) {
+    dictionaryHtml = `
+      <div class="section dictionary">
+        <div class="section-title">Cambridge Dictionary</div>
+        ${d.definitions.slice(0, 3).map((def) => `
+          <div class="def-entry">
+            <span class="pos">${escapeHtml(def.partOfSpeech)}</span>
+            <span class="meaning">${escapeHtml(def.meaning)}</span>
+            ${def.examples.length ? `<div class="def-examples">${def.examples.map((ex) => `<div class="def-example">"${escapeHtml(ex)}"</div>`).join('')}</div>` : ''}
+          </div>
+        `).join('')}
+      </div>
+    `;
+  }
+
+  // --- AI section placeholder (lazy-loaded) ---
+  const aiHtml = `<div class="section ai-section loading-ai"><div class="ai-loading-hint"><svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" style="display:inline;vertical-align:-1px;margin-right:4px"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg>Loading AI analysis...</div></div>`;
+
+  // --- For paragraphs, show word count info ---
+  let metaHtml = '';
+  if (!isWord && !isPhrase) {
+    const wordCount = text.split(/\s+/).length;
+    const sentenceCount = text.split(/[.!?]+/).filter(Boolean).length;
+    metaHtml = `<div class="section meta-info"><span class="meta-badge">${wordCount} words</span><span class="meta-badge">${sentenceCount} sentence${sentenceCount > 1 ? 's' : ''}</span></div>`;
+  }
+
+  // --- Header: truncate long text ---
+  const displayText = text.length > 60 ? text.substring(0, 57) + '...' : text;
+
+  shadowRoot.innerHTML = `
+    <style>${getStyles()}</style>
+    <div class="popup-container">
+      <div class="popup-header">
+        <span class="popup-word">${escapeHtml(displayText)}</span>
+        ${phoneticsHtml}
+        <button class="popup-close" title="Close" aria-label="Close"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+      </div>
+      <div class="popup-body">
+        ${metaHtml}
+        ${translationHtml}
+        ${alternativesHtml}
+        ${definitionsHtml}
+        ${synonymsHtml}
+        ${examplesHtml}
+        ${aiHtml}
+        ${dictionaryHtml}
+      </div>
+      <div class="popup-footer">
+        <button class="save-btn" title="Save to notes"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21H5a2 2 0 01-2-2V5a2 2 0 012-2h11l5 5v11a2 2 0 01-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg> Save</button>
+      </div>
+    </div>
+  `;
+
+  // Event listeners
+  shadowRoot.querySelector('.popup-close')?.addEventListener('click', hidePopup);
+  shadowRoot.querySelector('.save-btn')?.addEventListener('click', () => {
+    saveWord(text, t?.translated || '');
+  });
+  shadowRoot.querySelectorAll('.audio-btn').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const url = (btn as HTMLElement).dataset.url;
+      if (url) new Audio(url).play();
+    });
+  });
+}
+
+async function saveWord(word: string, translation: string) {
+  const saveBtn = shadowRoot?.querySelector('.save-btn') as HTMLButtonElement | null;
+  if (!saveBtn || saveBtn.disabled) return;
+
+  // Disable immediately to prevent double-clicks
+  saveBtn.disabled = true;
+  saveBtn.textContent = 'Saving...';
+
+  try {
+    const context = getSelectionContext();
+    await sendMessage({
+      type: 'SAVE_NOTE',
+      note: {
+        word,
+        translation,
+        context,
+        sourceUrl: window.location.href,
+        sourceTitle: document.title,
+        tags: [],
+      },
+    });
+    saveBtn.textContent = '✓ Saved!';
+  } catch {
+    saveBtn.textContent = '✗ Failed';
+    saveBtn.disabled = false; // Allow retry on failure
+  }
+}
+
+function getSelectionContext(): string {
+  const selection = window.getSelection();
+  if (!selection || selection.rangeCount === 0) return '';
+
+  const range = selection.getRangeAt(0);
+  const container = range.startContainer.parentElement;
+  return container?.textContent?.substring(0, 200) || '';
+}
+
+async function sendMessage(message: MessageType): Promise<unknown> {
+  return new Promise((resolve, reject) => {
+    chrome.runtime.sendMessage(message, (response) => {
+      if (chrome.runtime.lastError) {
+        reject(new Error(chrome.runtime.lastError.message));
+        return;
+      }
+      if (response?.success) {
+        resolve(response.data);
+      } else {
+        reject(new Error(response?.error || 'Unknown error'));
+      }
+    });
+  });
+}
+
+function escapeHtml(str: string): string {
+  const div = document.createElement('div');
+  div.textContent = str;
+  return div.innerHTML;
+}
+
+function getStyles(): string {
+  return `
+    :host {
+      --color-primary: #2563EB;
+      --color-primary-hover: #1d4ed8;
+      --color-bg: #ffffff;
+      --color-surface: #f8fafc;
+      --color-text: #1e293b;
+      --color-text-secondary: #64748b;
+      --color-text-muted: #94a3b8;
+      --color-border: #e2e8f0;
+      --color-success: #16a34a;
+      --color-error: #dc2626;
+      --radius: 12px;
+      --shadow: 0 8px 32px rgba(0,0,0,0.12), 0 2px 8px rgba(0,0,0,0.08);
+      --transition: 200ms cubic-bezier(0.4, 0, 0.2, 1);
+      --font: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    }
+    .popup-container {
+      background: var(--color-bg);
+      border: 1px solid var(--color-border);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+      font-size: 14px;
+      font-family: var(--font);
+      line-height: 1.5;
+      color: var(--color-text);
+      overflow: hidden;
+      animation: popupIn 200ms cubic-bezier(0.16, 1, 0.3, 1);
+    }
+    @keyframes popupIn {
+      from { opacity: 0; transform: translateY(4px) scale(0.98); }
+      to { opacity: 1; transform: translateY(0) scale(1); }
+    }
+    .popup-header {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 12px 14px;
+      border-bottom: 1px solid var(--color-border);
+      background: var(--color-surface);
+    }
+    .popup-word {
+      font-weight: 600;
+      font-size: 15px;
+      color: var(--color-primary);
+      flex: 1;
+      letter-spacing: -0.01em;
+    }
+    .popup-close {
+      background: none;
+      border: none;
+      cursor: pointer;
+      font-size: 18px;
+      color: var(--color-text-muted);
+      padding: 4px 6px;
+      border-radius: 6px;
+      line-height: 1;
+      transition: all var(--transition);
+    }
+    .popup-close:hover { background: var(--color-border); color: var(--color-text); }
+    .popup-body {
+      padding: 14px;
+      max-height: 420px;
+      overflow-y: auto;
+    }
+    .popup-body::-webkit-scrollbar { width: 4px; }
+    .popup-body::-webkit-scrollbar-track { background: transparent; }
+    .popup-body::-webkit-scrollbar-thumb { background: var(--color-border); border-radius: 4px; }
+    .popup-footer {
+      padding: 10px 14px;
+      border-top: 1px solid var(--color-border);
+      display: flex;
+      justify-content: flex-end;
+      background: var(--color-surface);
+    }
+    .save-btn {
+      background: var(--color-primary);
+      color: white;
+      border: none;
+      padding: 7px 16px;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 13px;
+      font-weight: 500;
+      font-family: var(--font);
+      transition: all var(--transition);
+    }
+    .save-btn:hover { background: var(--color-primary-hover); transform: translateY(-1px); }
+    .save-btn:active { transform: translateY(0); }
+    .save-btn:disabled { background: #93c5fd; cursor: default; transform: none; }
+    .section { margin-bottom: 14px; }
+    .section:last-child { margin-bottom: 0; }
+    .section-title {
+      font-size: 11px;
+      font-weight: 600;
+      text-transform: uppercase;
+      color: var(--color-text-muted);
+      margin-bottom: 6px;
+      letter-spacing: 0.05em;
+    }
+    .translated-text {
+      font-size: 15px;
+      font-weight: 500;
+      color: var(--color-text);
+      line-height: 1.4;
+    }
+    .explanation {
+      font-size: 13px;
+      color: var(--color-text-secondary);
+      margin-top: 4px;
+      line-height: 1.5;
+    }
+    .examples { margin-top: 8px; }
+    .example {
+      font-size: 13px;
+      color: var(--color-text-secondary);
+      font-style: italic;
+      margin-bottom: 3px;
+      padding-left: 8px;
+      border-left: 2px solid var(--color-border);
+    }
+    .phonetics {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .ipa {
+      font-size: 13px;
+      color: var(--color-text-secondary);
+      font-style: italic;
+    }
+    .audio-btn {
+      background: none;
+      border: none;
+      cursor: pointer;
+      font-size: 14px;
+      padding: 2px 4px;
+      border-radius: 4px;
+      transition: background var(--transition);
+    }
+    .audio-btn:hover { background: var(--color-border); }
+    .dictionary .def-entry {
+      margin-bottom: 10px;
+      padding-left: 10px;
+      border-left: 3px solid var(--color-border);
+    }
+    .pos {
+      display: inline-block;
+      font-size: 10px;
+      font-weight: 600;
+      text-transform: uppercase;
+      color: var(--color-text-muted);
+      background: var(--color-surface);
+      padding: 2px 8px;
+      border-radius: 4px;
+      border: 1px solid var(--color-border);
+      margin-right: 8px;
+      letter-spacing: 0.03em;
+    }
+    .meaning { font-size: 13px; color: var(--color-text); line-height: 1.5; }
+    .def-examples { margin-top: 4px; }
+    .def-example {
+      font-size: 12px;
+      color: var(--color-text-muted);
+      font-style: italic;
+      line-height: 1.4;
+    }
+    .loading {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 20px 0;
+      color: var(--color-text-muted);
+      font-size: 13px;
+    }
+    .spinner {
+      width: 16px;
+      height: 16px;
+      border: 2px solid var(--color-border);
+      border-top-color: var(--color-primary);
+      border-radius: 50%;
+      animation: spin 0.7s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .error {
+      color: var(--color-error);
+      font-size: 13px;
+      padding: 8px 12px;
+      background: #fef2f2;
+      border-radius: 6px;
+      border: 1px solid #fecaca;
+    }
+    .ai-section {
+      border-top: 1px dashed var(--color-border);
+      padding-top: 12px;
+      margin-top: 12px;
+    }
+    .ai-loading-hint {
+      font-size: 12px;
+      color: var(--color-text-muted);
+    }
+    .loading-ai .ai-loading-hint { display: block; }
+    .ai-section:empty { display: none; }
+    .ai-details { margin-top: 6px; }
+    .ai-detail-item {
+      font-size: 13px;
+      color: var(--color-text-secondary);
+      padding: 3px 0;
+      padding-left: 8px;
+      border-left: 2px solid var(--color-border);
+      margin-bottom: 4px;
+    }
+    .alt-list, .syn-list {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+    }
+    .alt-chip, .syn-chip {
+      display: inline-block;
+      font-size: 12px;
+      padding: 3px 10px;
+      border-radius: 14px;
+      background: var(--color-surface);
+      border: 1px solid var(--color-border);
+      color: var(--color-text-secondary);
+    }
+    .alt-chip { background: #eff6ff; border-color: #bfdbfe; color: #1d4ed8; }
+    .gt-definitions .gt-def-entry {
+      margin-bottom: 6px;
+      display: flex;
+      align-items: baseline;
+      gap: 8px;
+    }
+    .gt-meanings { font-size: 13px; color: var(--color-text-secondary); }
+    .meta-info {
+      display: flex;
+      gap: 8px;
+      margin-bottom: 4px;
+    }
+    .meta-badge {
+      font-size: 11px;
+      padding: 2px 8px;
+      border-radius: 10px;
+      background: var(--color-surface);
+      border: 1px solid var(--color-border);
+      color: var(--color-text-muted);
+      font-weight: 500;
+    }
+    .lang-badge {
+      display: inline-block;
+      font-size: 9px;
+      font-weight: 600;
+      padding: 1px 6px;
+      border-radius: 4px;
+      background: var(--color-surface);
+      border: 1px solid var(--color-border);
+      color: var(--color-text-muted);
+      margin-left: 6px;
+      letter-spacing: 0.03em;
+      vertical-align: middle;
+    }
+
+    @media (prefers-color-scheme: dark) {
+      :host {
+        --color-bg: #1e293b;
+        --color-surface: #0f172a;
+        --color-text: #f1f5f9;
+        --color-text-secondary: #94a3b8;
+        --color-text-muted: #64748b;
+        --color-border: #334155;
+        --color-primary: #60a5fa;
+        --color-primary-hover: #3b82f6;
+        --shadow: 0 8px 32px rgba(0,0,0,0.4), 0 2px 8px rgba(0,0,0,0.3);
+      }
+      .popup-container { border-color: #475569; }
+      .error { background: #450a0a; border-color: #991b1b; color: #fca5a5; }
+      .pos { background: #334155; border-color: #475569; color: #94a3b8; }
+      .save-btn { background: #3b82f6; }
+      .save-btn:hover { background: #2563eb; }
+      .save-btn:disabled { background: #1e40af; opacity: 0.6; }
+      .alt-chip { background: #1e3a5f; border-color: #2563eb; color: #93c5fd; }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      .popup-container { animation: none; }
+      * { transition: none !important; }
+    }
+  `;
+}
+
+// Initialize
+init();
