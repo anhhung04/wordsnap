@@ -351,13 +351,26 @@ async function loadAiEnhancement(text: string, isWord: boolean, isPhrase: boolea
 
     if (aiSection && ai.translated) {
       const titleLabel = isWord ? 'AI Word Analysis' : isPhrase ? 'AI Explanation' : 'AI Analysis';
+
+      // Split explanation into structured lines (collocations, antonyms, grammar)
+      const explanationLines = ai.explanation?.split('\n').filter(Boolean) || [];
+      const explanationHtml = explanationLines.map((line) => {
+        if (line.startsWith('Collocations:') || line.startsWith('Antonyms:')) {
+          const [label, ...rest] = line.split(':');
+          const items = rest.join(':').split(',').map((s) => s.trim()).filter(Boolean);
+          return `<div class="ai-meta-line"><span class="ai-meta-label">${escapeHtml(label)}:</span> ${items.map((i) => `<span class="ai-meta-chip">${escapeHtml(i)}</span>`).join(' ')}</div>`;
+        }
+        return `<div class="explanation">${escapeHtml(line)}</div>`;
+      }).join('');
+
       aiSection.innerHTML = `
         <div class="section-title"><svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" style="display:inline;vertical-align:-1px;margin-right:4px"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg>${titleLabel}</div>
         <div class="translated-text">${escapeHtml(ai.translated)}</div>
-        ${ai.explanation ? `<div class="explanation">${escapeHtml(ai.explanation)}</div>` : ''}
+        ${explanationHtml}
         ${ai.examples?.length ? `<div class="ai-details">${ai.examples.map((ex) => `<div class="ai-detail-item">${escapeHtml(ex)}</div>`).join('')}</div>` : ''}
       `;
       aiSection.classList.remove('loading-ai');
+      repositionPopup();
     }
   } catch {
     // AI not available - show subtle message instead of removing
@@ -377,6 +390,7 @@ function renderResult(text: string, translation: unknown, dictionary: unknown, i
     translated?: string;
     type?: string;
     sourceLang?: string;
+    transliteration?: string;
     alternatives?: string[];
     definitions?: { pos: string; meanings: string[] }[];
     examples?: string[];
@@ -388,12 +402,15 @@ function renderResult(text: string, translation: unknown, dictionary: unknown, i
     definitions?: { partOfSpeech: string; meaning: string; examples: string[] }[];
   } | null;
 
-  // --- Header info (IPA + word class for words) ---
+  // --- Header info (IPA + transliteration + word class for words) ---
   let phoneticsHtml = '';
+  // Prefer Cambridge IPA, fall back to GT transliteration
   if (d?.found && d.phonetics?.length) {
     phoneticsHtml = `<div class="phonetics">${d.phonetics.map((p) =>
       `<span class="ipa">${escapeHtml(p.ipa)}</span>${p.audioUrl ? `<button class="audio-btn" data-url="${p.audioUrl}" title="Play pronunciation" aria-label="Play pronunciation"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M15.54 8.46a5 5 0 010 7.07"/></svg></button>` : ''}`
     ).join(' ')}</div>`;
+  } else if (t?.transliteration) {
+    phoneticsHtml = `<div class="phonetics"><span class="ipa transliteration">${escapeHtml(t.transliteration)}</span></div>`;
   }
 
   // Word class badges (noun, verb, adj, etc.) from GT definitions or Cambridge
@@ -845,6 +862,11 @@ function getStyles(): string {
       color: var(--color-text-secondary);
       font-style: italic;
     }
+    .ipa.transliteration {
+      font-style: normal;
+      font-size: 12px;
+      color: var(--color-text-muted);
+    }
     .audio-btn {
       background: none;
       border: none;
@@ -930,6 +952,30 @@ function getStyles(): string {
       padding-left: 8px;
       border-left: 2px solid var(--color-border);
       margin-bottom: 4px;
+    }
+    .ai-meta-line {
+      display: flex;
+      align-items: baseline;
+      flex-wrap: wrap;
+      gap: 4px;
+      margin-top: 6px;
+      font-size: 12px;
+    }
+    .ai-meta-label {
+      font-weight: 600;
+      color: var(--color-text-muted);
+      text-transform: uppercase;
+      font-size: 10px;
+      letter-spacing: 0.04em;
+    }
+    .ai-meta-chip {
+      display: inline-block;
+      font-size: 12px;
+      padding: 1px 8px;
+      border-radius: 10px;
+      background: var(--color-surface);
+      border: 1px solid var(--color-border);
+      color: var(--color-text-secondary);
     }
     .translation-row {
       display: flex;

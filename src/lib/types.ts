@@ -5,6 +5,7 @@ export interface TranslationResult {
   translated: string;
   targetLang: string;
   sourceLang?: string;
+  transliteration?: string;
   type: 'word' | 'phrase' | 'sentence' | 'paragraph';
   explanation?: string;
   alternatives?: string[];

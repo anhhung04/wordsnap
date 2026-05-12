@@ -17,13 +17,17 @@ Provide:
 - Translation
 - Brief explanation of usage, nuance, or common contexts
 - 2 natural example sentences using this word
-- Any important grammar notes (e.g. irregular forms, collocations)
+- Common collocations (words frequently used with this word)
+- Antonyms if applicable
+- Any important grammar notes (e.g. irregular forms)
 
 Respond in this exact JSON format:
 {
   "translated": "<translation in ${targetLang}>",
   "explanation": "<usage explanation>",
   "examples": ["<example 1>", "<example 2>"],
+  "collocations": ["<collocation 1>", "<collocation 2>"],
+  "antonyms": ["<antonym 1>", "<antonym 2>"],
   "grammar": "<grammar note or empty string>"
 }
 Only respond with valid JSON, no markdown fences.`;
@@ -44,6 +48,8 @@ Respond in this exact JSON format:
   "translated": "<natural translation in ${targetLang}>",
   "explanation": "<meaning and usage explanation>",
   "examples": ["<similar expression or usage example>"],
+  "collocations": [],
+  "antonyms": [],
   "grammar": "<is it an idiom/collocation/literal? any grammar pattern?>"
 }
 Only respond with valid JSON, no markdown fences.`;
@@ -64,6 +70,8 @@ Respond in this exact JSON format:
   "translated": "<fluent translation in ${targetLang}>",
   "explanation": "<main idea summary>",
   "examples": ["<word1>: <meaning>", "<word2>: <meaning>"],
+  "collocations": [],
+  "antonyms": [],
   "grammar": "<notable grammar structures explained>"
 }
 Only respond with valid JSON, no markdown fences.`;
@@ -127,7 +135,7 @@ export async function translate(text: string): Promise<TranslationResult> {
     throw new Error('No translation returned from Gemini');
   }
 
-  let parsed: { translated: string; explanation?: string; examples?: string[]; grammar?: string };
+  let parsed: { translated: string; explanation?: string; examples?: string[]; grammar?: string; collocations?: string[]; antonyms?: string[] };
   try {
     // Strip markdown code fences if present
     const cleaned = rawText.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
@@ -140,12 +148,21 @@ export async function translate(text: string): Promise<TranslationResult> {
   const wordCount = text.trim().split(/\s+/).length;
   const type: TranslationResult['type'] = wordCount <= 2 ? 'word' : wordCount <= 6 ? 'phrase' : wordCount <= 30 ? 'sentence' : 'paragraph';
 
+  // Build explanation combining explanation + grammar
+  const explanationParts = [parsed.explanation, parsed.grammar].filter(Boolean);
+  const explanation = explanationParts.length ? explanationParts.join(' | ') : undefined;
+
+  // Attach collocations and antonyms as extra metadata via explanation
+  const extras: string[] = [];
+  if (parsed.collocations?.length) extras.push(`Collocations: ${parsed.collocations.join(', ')}`);
+  if (parsed.antonyms?.length) extras.push(`Antonyms: ${parsed.antonyms.join(', ')}`);
+
   const result: TranslationResult = {
     original: text,
     translated: parsed.translated,
     targetLang: settings.targetLang,
     type,
-    explanation: [parsed.explanation, parsed.grammar].filter(Boolean).join(' | ') || undefined,
+    explanation: [explanation, ...extras].filter(Boolean).join('\n') || undefined,
     examples: parsed.examples,
   };
 

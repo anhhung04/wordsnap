@@ -9,6 +9,7 @@ const cache = new LRUCache<TranslationResult>(300);
 
 export interface GoogleTranslateRaw {
   translated: string;
+  transliteration?: string;
   alternatives: string[];
   definitions: { pos: string; meanings: string[] }[];
   examples: string[];
@@ -36,43 +37,57 @@ export async function googleTranslate(text: string): Promise<TranslationResult> 
 
   const params = new URLSearchParams({
     client: 'gtx',
-    sl: 'auto', // Auto-detect source language
+    sl: 'auto',
     tl: targetLang,
     hl: 'en',
-    dt: 'bd', // dictionary (definitions + alternatives)
+    dt: 'bd',
     ie: 'UTF-8',
     oe: 'UTF-8',
     q: text,
   });
 
-  // Multiple dt params for richer response
   const extraDt = ['ex', 'ld', 'md', 'qca', 'rw', 'rm', 'ss', 't', 'at'];
   const url = `${GT_BASE}?${params.toString()}&${extraDt.map((d) => `dt=${d}`).join('&')}`;
 
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 10000); // 10s timeout
+  // Retry up to 2 times on network/server errors
+  let lastError: Error | null = null;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 10000);
 
-  let response: Response;
-  try {
-    response = await fetch(url, { signal: controller.signal });
-  } catch (e) {
-    if ((e as Error).name === 'AbortError') {
-      throw new Error('Translation request timed out');
+    try {
+      const response = await fetch(url, { signal: controller.signal });
+      clearTimeout(timeout);
+
+      if (response.ok) {
+        const data = await response.json();
+        const parsed = parseResponse(data, text, targetLang);
+        cache.set(cacheKey, parsed);
+        return parsed;
+      }
+
+      // Don't retry on client errors (4xx)
+      if (response.status >= 400 && response.status < 500) {
+        throw new Error(`Google Translate error (${response.status})`);
+      }
+
+      lastError = new Error(`Google Translate error (${response.status})`);
+    } catch (e) {
+      clearTimeout(timeout);
+      if ((e as Error).name === 'AbortError') {
+        lastError = new Error('Translation request timed out');
+      } else if ((e as Error).message.includes('Google Translate error (4')) {
+        throw e; // Don't retry client errors
+      } else {
+        lastError = e as Error;
+      }
     }
-    throw e;
-  } finally {
-    clearTimeout(timeout);
+
+    // Wait before retry (200ms, 500ms)
+    if (attempt < 2) await new Promise((r) => setTimeout(r, (attempt + 1) * 250));
   }
 
-  if (!response.ok) {
-    throw new Error(`Google Translate error (${response.status})`);
-  }
-
-  const data = await response.json();
-  const parsed = parseResponse(data, text, targetLang);
-
-  cache.set(cacheKey, parsed);
-  return parsed;
+  throw lastError || new Error('Translation failed');
 }
 
 function parseResponse(data: unknown[], text: string, targetLang: string): TranslationResult {
@@ -84,12 +99,13 @@ function parseResponse(data: unknown[], text: string, targetLang: string): Trans
     translated: raw.translated,
     targetLang,
     sourceLang: raw.detectedLang,
+    transliteration: raw.transliteration || undefined,
     type,
     alternatives: raw.alternatives.length ? raw.alternatives : undefined,
     definitions: raw.definitions.length ? raw.definitions : undefined,
     examples: raw.examples.length ? raw.examples.slice(0, 4) : undefined,
     synonyms: raw.synonyms.length ? raw.synonyms : undefined,
-    explanation: undefined, // Let the UI compose from structured data
+    explanation: undefined,
   };
 }
 
@@ -103,13 +119,19 @@ function extractRaw(data: unknown[]): GoogleTranslateRaw {
   };
 
   // data[0] = translation segments
-  // Each segment: [translated, original, ...]
+  // Each segment: [translated, original, translitOfTranslated, translitOfSource]
   if (Array.isArray(data[0])) {
     const segments = data[0] as unknown[][];
     result.translated = segments
       .filter((seg) => seg && seg[0])
       .map((seg) => seg[0] as string)
       .join('');
+
+    // Last segment often contains transliteration at index 3 (source romanization)
+    const lastSeg = segments[segments.length - 1];
+    if (lastSeg && typeof lastSeg[3] === 'string' && lastSeg[3].trim()) {
+      result.transliteration = lastSeg[3].trim();
+    }
   }
 
   // data[2] = detected source language (e.g., "en")
