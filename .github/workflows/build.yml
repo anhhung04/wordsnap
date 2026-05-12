@@ -1,0 +1,87 @@
+name: Build & Pack Extension
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+    branches: [main]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Type check
+        run: npx tsc --noEmit
+
+      - name: Lint
+        run: npx eslint src/ --ext .ts
+
+      - name: Build
+        run: npm run build
+
+      - name: Pack CRX
+        env:
+          EXTENSION_KEY: ${{ secrets.EXTENSION_KEY }}
+        run: |
+          if [ -z "$EXTENSION_KEY" ]; then
+            echo "EXTENSION_KEY secret not set, skipping CRX packing"
+            exit 0
+          fi
+          echo "$EXTENSION_KEY" > key.pem
+          npx crx pack dist -o wordsnap.crx -p key.pem
+          rm key.pem
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: wordsnap-dist
+          path: dist/
+
+      - name: Upload CRX artifact
+        if: env.EXTENSION_KEY != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: wordsnap-crx
+          path: wordsnap.crx
+        env:
+          EXTENSION_KEY: ${{ secrets.EXTENSION_KEY }}
+
+  release:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: wordsnap-crx
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: wordsnap-dist
+          path: dist/
+
+      - name: Zip dist
+        run: cd dist && zip -r ../wordsnap.zip .
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            wordsnap.crx
+            wordsnap.zip
+          generate_release_notes: true

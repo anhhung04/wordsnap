@@ -22,3 +22,11 @@ Thumbs.db
 # Environment
 .env
 .env.local
+
+# Extension signing key - never commit
+key.pem
+key.pub
+
+# Build artifacts
+*.crx
+*.zip
