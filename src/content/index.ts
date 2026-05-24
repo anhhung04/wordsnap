@@ -346,27 +346,34 @@ async function loadAiEnhancement(text: string, isWord: boolean, isPhrase: boolea
     // Discard if stale
     if (requestId !== currentRequestId || !aiResult || !shadowRoot) return;
 
-    const ai = aiResult as { translated?: string; explanation?: string; examples?: string[] };
+    const ai = aiResult as {
+      translated?: string;
+      explanation?: string;
+      examples?: string[];
+      collocations?: string[];
+      antonyms?: string[];
+      grammar?: string;
+    };
     const aiSection = shadowRoot.querySelector('.ai-section');
 
     if (aiSection && ai.translated) {
       const titleLabel = isWord ? 'AI Word Analysis' : isPhrase ? 'AI Explanation' : 'AI Analysis';
-
-      // Split explanation into structured lines (collocations, antonyms, grammar)
-      const explanationLines = ai.explanation?.split('\n').filter(Boolean) || [];
-      const explanationHtml = explanationLines.map((line) => {
-        if (line.startsWith('Collocations:') || line.startsWith('Antonyms:')) {
-          const [label, ...rest] = line.split(':');
-          const items = rest.join(':').split(',').map((s) => s.trim()).filter(Boolean);
-          return `<div class="ai-meta-line"><span class="ai-meta-label">${escapeHtml(label)}:</span> ${items.map((i) => `<span class="ai-meta-chip">${escapeHtml(i)}</span>`).join(' ')}</div>`;
-        }
-        return `<div class="explanation">${escapeHtml(line)}</div>`;
-      }).join('');
+      const explanationHtml = ai.explanation ? `<div class="explanation">${escapeHtml(ai.explanation)}</div>` : '';
+      const grammarHtml = ai.grammar ? `<div class="ai-meta-line"><span class="ai-meta-label">Grammar:</span><span>${escapeHtml(ai.grammar)}</span></div>` : '';
+      const collocationsHtml = ai.collocations?.length
+        ? `<div class="ai-meta-line"><span class="ai-meta-label">AI Collocations:</span> ${ai.collocations.map((item) => `<span class="ai-meta-chip">${escapeHtml(item)}</span>`).join(' ')}</div>`
+        : '';
+      const antonymsHtml = ai.antonyms?.length
+        ? `<div class="ai-meta-line"><span class="ai-meta-label">Antonyms:</span> ${ai.antonyms.map((item) => `<span class="ai-meta-chip">${escapeHtml(item)}</span>`).join(' ')}</div>`
+        : '';
 
       aiSection.innerHTML = `
         <div class="section-title"><svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" style="display:inline;vertical-align:-1px;margin-right:4px"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg>${titleLabel}</div>
         <div class="translated-text">${escapeHtml(ai.translated)}</div>
         ${explanationHtml}
+        ${grammarHtml}
+        ${collocationsHtml}
+        ${antonymsHtml}
         ${ai.examples?.length ? `<div class="ai-details">${ai.examples.map((ex) => `<div class="ai-detail-item">${escapeHtml(ex)}</div>`).join('')}</div>` : ''}
       `;
       aiSection.classList.remove('loading-ai');
@@ -395,11 +402,17 @@ function renderResult(text: string, translation: unknown, dictionary: unknown, i
     definitions?: { pos: string; meanings: string[] }[];
     examples?: string[];
     synonyms?: string[];
+    collocations?: string[];
+    antonyms?: string[];
+    grammar?: string;
   } | null;
   const d = dictionary as {
     found?: boolean;
-    phonetics?: { ipa: string; audioUrl?: string }[];
+    phonetics?: { ipa: string; audioUrl?: string; region?: 'UK' | 'US' }[];
     definitions?: { partOfSpeech: string; meaning: string; examples: string[] }[];
+    examples?: string[];
+    synonyms?: string[];
+    collocations?: string[];
   } | null;
 
   // --- Header info (IPA + transliteration + word class for words) ---
@@ -407,7 +420,7 @@ function renderResult(text: string, translation: unknown, dictionary: unknown, i
   // Prefer Cambridge IPA, fall back to GT transliteration
   if (d?.found && d.phonetics?.length) {
     phoneticsHtml = `<div class="phonetics">${d.phonetics.map((p) =>
-      `<span class="ipa">${escapeHtml(p.ipa)}</span>${p.audioUrl ? `<button class="audio-btn" data-url="${p.audioUrl}" title="Play pronunciation" aria-label="Play pronunciation"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M15.54 8.46a5 5 0 010 7.07"/></svg></button>` : ''}`
+      `<span class="ipa-group">${p.region ? `<span class="ipa-label">${escapeHtml(p.region)}</span>` : ''}<span class="ipa">${escapeHtml(p.ipa)}</span>${p.audioUrl ? `<button class="audio-btn" data-url="${p.audioUrl}" title="Play pronunciation" aria-label="Play pronunciation"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M15.54 8.46a5 5 0 010 7.07"/></svg></button>` : ''}</span>`
     ).join(' ')}</div>`;
   } else if (t?.transliteration) {
     phoneticsHtml = `<div class="phonetics"><span class="ipa transliteration">${escapeHtml(t.transliteration)}</span></div>`;
@@ -497,35 +510,16 @@ function renderResult(text: string, translation: unknown, dictionary: unknown, i
     `;
   }
 
-  // --- Synonyms (for words and short phrases) ---
-  let synonymsHtml = '';
-  if (t?.synonyms?.length && (isWord || isPhrase)) {
-    synonymsHtml = `
-      <div class="section synonyms">
-        <div class="section-title">Synonyms</div>
-        <div class="syn-list">${t.synonyms.map((s) => `<span class="syn-chip">${escapeHtml(s)}</span>`).join('')}</div>
-      </div>
-    `;
-  }
+  const mergedSynonyms = uniqueItems([...(t?.synonyms || []), ...(d?.synonyms || [])], 12);
+  const mergedCollocations = uniqueItems([...(t?.collocations || []), ...(d?.collocations || [])], 12);
+  const mergedExamples = uniqueItems([...(t?.examples || []), ...(d?.examples || [])], 10);
 
-  // --- Examples (words/phrases) ---
-  let examplesHtml = '';
-  if (t?.examples?.length && (isWord || isPhrase)) {
-    examplesHtml = `
-      <div class="section examples-section">
-        <div class="section-title">Examples</div>
-        <div class="examples">${t.examples.map((ex) => `<div class="example">${escapeHtml(ex)}</div>`).join('')}</div>
-      </div>
-    `;
-  }
-
-  // --- Cambridge Dictionary (single words, collapsible) ---
-  let dictionaryHtml = '';
+  let cambridgeDefinitionsHtml = '';
   if (d?.found && d.definitions?.length) {
-    const visibleCam = d.definitions.slice(0, 2);
-    const hiddenCam = d.definitions.slice(2);
-    dictionaryHtml = `
-      <div class="section dictionary">
+    const visibleCam = d.definitions.slice(0, 3);
+    const hiddenCam = d.definitions.slice(3);
+    cambridgeDefinitionsHtml = `
+      <div class="section dictionary dictionary-panel-section">
         <div class="section-title">Cambridge Dictionary</div>
         ${visibleCam.map((def) => `
           <div class="def-entry">
@@ -536,13 +530,89 @@ function renderResult(text: string, translation: unknown, dictionary: unknown, i
         `).join('')}
         ${hiddenCam.length ? `
           <div class="cam-collapsed" style="display:none">
-            ${hiddenCam.map((def) => `<div class="def-entry"><span class="pos">${escapeHtml(def.partOfSpeech)}</span><span class="meaning">${escapeHtml(def.meaning)}</span></div>`).join('')}
+            ${hiddenCam.map((def) => `
+              <div class="def-entry">
+                <span class="pos">${escapeHtml(def.partOfSpeech)}</span>
+                <span class="meaning">${escapeHtml(def.meaning)}</span>
+                ${def.examples.length ? `<div class="def-examples">${def.examples.map((ex) => `<div class="def-example">"${escapeHtml(ex)}"</div>`).join('')}</div>` : ''}
+              </div>
+            `).join('')}
           </div>
           <button class="expand-btn" data-target="cam-collapsed">+${hiddenCam.length} more</button>
         ` : ''}
       </div>
     `;
   }
+
+  const overviewTabId = 'tab-overview';
+  const detailsTabId = 'tab-details';
+  const synonymsTabId = 'tab-synonyms';
+  const collocationsTabId = 'tab-collocations';
+  const examplesTabId = 'tab-examples';
+
+  const overviewPanelId = 'panel-overview';
+  const detailsPanelId = 'panel-details';
+  const synonymsPanelId = 'panel-synonyms';
+  const collocationsPanelId = 'panel-collocations';
+  const examplesPanelId = 'panel-examples';
+
+  const tabButtons = [
+    { id: overviewTabId, label: 'Overview', panelId: overviewPanelId, active: true },
+    { id: detailsTabId, label: 'Definitions', panelId: detailsPanelId, active: false },
+    ...(mergedSynonyms.length ? [{ id: synonymsTabId, label: 'Synonyms', panelId: synonymsPanelId, active: false }] : []),
+    ...(mergedCollocations.length ? [{ id: collocationsTabId, label: 'Collocations', panelId: collocationsPanelId, active: false }] : []),
+    ...(mergedExamples.length ? [{ id: examplesTabId, label: 'Examples', panelId: examplesPanelId, active: false }] : []),
+  ];
+
+  const tabsHtml = `
+    <div class="tabs" role="tablist" aria-label="Dictionary details">
+      ${tabButtons.map((tab) => `
+        <button class="tab-btn${tab.active ? ' active' : ''}" role="tab" id="${tab.id}" aria-selected="${tab.active ? 'true' : 'false'}" aria-controls="${tab.panelId}" data-panel="${tab.panelId}">${tab.label}</button>
+      `).join('')}
+    </div>
+  `;
+
+  const overviewPanelHtml = `
+    <section class="tab-panel active" id="${overviewPanelId}" role="tabpanel" aria-labelledby="${overviewTabId}">
+      ${translationHtml}
+      ${alternativesHtml}
+      ${cambridgeDefinitionsHtml}
+    </section>
+  `;
+
+  const detailsPanelHtml = `
+    <section class="tab-panel" id="${detailsPanelId}" role="tabpanel" aria-labelledby="${detailsTabId}" hidden>
+      ${definitionsHtml || '<div class="section empty-state">No Google definition groups available for this selection.</div>'}
+      ${d?.found ? '' : '<div class="section empty-state">Cambridge dictionary data is only available when a word entry is found.</div>'}
+    </section>
+  `;
+
+  const synonymsPanelHtml = mergedSynonyms.length ? `
+    <section class="tab-panel" id="${synonymsPanelId}" role="tabpanel" aria-labelledby="${synonymsTabId}" hidden>
+      <div class="section synonyms">
+        <div class="section-title">Synonyms</div>
+        <div class="syn-list">${mergedSynonyms.map((s) => `<span class="syn-chip">${escapeHtml(s)}</span>`).join('')}</div>
+      </div>
+    </section>
+  ` : '';
+
+  const collocationsPanelHtml = mergedCollocations.length ? `
+    <section class="tab-panel" id="${collocationsPanelId}" role="tabpanel" aria-labelledby="${collocationsTabId}" hidden>
+      <div class="section collocations-section">
+        <div class="section-title">Collocations</div>
+        <div class="syn-list">${mergedCollocations.map((item) => `<span class="syn-chip collocation-chip">${escapeHtml(item)}</span>`).join('')}</div>
+      </div>
+    </section>
+  ` : '';
+
+  const examplesPanelHtml = mergedExamples.length ? `
+    <section class="tab-panel" id="${examplesPanelId}" role="tabpanel" aria-labelledby="${examplesTabId}" hidden>
+      <div class="section examples-section">
+        <div class="section-title">Examples</div>
+        <div class="examples">${mergedExamples.map((ex) => `<div class="example">${escapeHtml(ex)}</div>`).join('')}</div>
+      </div>
+    </section>
+  ` : '';
 
   // --- AI section placeholder (lazy-loaded) ---
   const aiHtml = `<div class="section ai-section loading-ai"><div class="ai-loading-hint"><svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" style="display:inline;vertical-align:-1px;margin-right:4px"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg>Loading AI analysis...</div></div>`;
@@ -572,13 +642,15 @@ function renderResult(text: string, translation: unknown, dictionary: unknown, i
       ${wordClassHtml}
       <div class="popup-body">
         ${metaHtml}
-        ${translationHtml}
-        ${alternativesHtml}
-        ${definitionsHtml}
-        ${synonymsHtml}
-        ${examplesHtml}
+        ${tabsHtml}
+        <div class="tab-panels">
+          ${overviewPanelHtml}
+          ${detailsPanelHtml}
+          ${synonymsPanelHtml}
+          ${collocationsPanelHtml}
+          ${examplesPanelHtml}
+        </div>
         ${aiHtml}
-        ${dictionaryHtml}
       </div>
       <div class="popup-footer">
         <button class="save-btn" title="Save to notes"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21H5a2 2 0 01-2-2V5a2 2 0 012-2h11l5 5v11a2 2 0 01-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg> Save</button>
@@ -632,6 +704,32 @@ function renderResult(text: string, translation: unknown, dictionary: unknown, i
         (btn as HTMLElement).textContent = hidden ? 'Show less' : btn.textContent || '';
         repositionPopup();
       }
+    });
+  });
+
+  shadowRoot.querySelectorAll('.tab-btn').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      if (!shadowRoot) return;
+      const panelId = (btn as HTMLElement).dataset.panel;
+      if (!panelId) return;
+
+      shadowRoot.querySelectorAll('.tab-btn').forEach((tab) => {
+        tab.classList.remove('active');
+        tab.setAttribute('aria-selected', 'false');
+      });
+      shadowRoot.querySelectorAll('.tab-panel').forEach((panel) => {
+        panel.classList.remove('active');
+        panel.setAttribute('hidden', 'true');
+      });
+
+      btn.classList.add('active');
+      btn.setAttribute('aria-selected', 'true');
+      const panel = shadowRoot.querySelector(`#${panelId}`);
+      if (panel) {
+        panel.classList.add('active');
+        panel.removeAttribute('hidden');
+      }
+      repositionPopup();
     });
   });
 
@@ -856,6 +954,19 @@ function getStyles(): string {
       display: flex;
       align-items: center;
       gap: 6px;
+      flex-wrap: wrap;
+    }
+    .ipa-group {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+    }
+    .ipa-label {
+      font-size: 10px;
+      font-weight: 600;
+      color: var(--color-text-muted);
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
     }
     .ipa {
       font-size: 13px;
@@ -1020,6 +1131,54 @@ function getStyles(): string {
       transition: opacity var(--transition);
     }
     .expand-btn:hover { opacity: 0.7; }
+    .tabs {
+      display: flex;
+      gap: 8px;
+      overflow-x: auto;
+      padding-bottom: 4px;
+      margin-bottom: 12px;
+      scrollbar-width: thin;
+    }
+    .tab-btn {
+      border: 1px solid var(--color-border);
+      background: var(--color-surface);
+      color: var(--color-text-secondary);
+      border-radius: 999px;
+      padding: 6px 12px;
+      font-size: 12px;
+      font-weight: 600;
+      cursor: pointer;
+      white-space: nowrap;
+      transition: all var(--transition);
+    }
+    .tab-btn:hover {
+      color: var(--color-primary);
+      border-color: var(--color-primary);
+    }
+    .tab-btn.active {
+      background: var(--color-primary);
+      border-color: var(--color-primary);
+      color: #fff;
+    }
+    .tab-panels {
+      min-height: 80px;
+    }
+    .tab-panel { display: none; }
+    .tab-panel.active { display: block; }
+    .empty-state {
+      color: var(--color-text-muted);
+      font-size: 13px;
+      font-style: italic;
+      padding: 8px 0;
+    }
+    .dictionary-panel-section {
+      margin-bottom: 0;
+    }
+    .collocation-chip {
+      background: #f5f3ff;
+      border-color: #c4b5fd;
+      color: #6d28d9;
+    }
     .alt-list, .syn-list {
       display: flex;
       flex-wrap: wrap;
@@ -1125,12 +1284,18 @@ function getStyles(): string {
     :host(.theme-dark) .save-btn:disabled { background: #1e40af; opacity: 0.6; }
     :host(.theme-dark) .alt-chip { background: #1e3a5f; border-color: #2563eb; color: #93c5fd; }
     :host(.theme-dark) .word-class-badge { background: #1e3a5f; border-color: #2563eb; color: #93c5fd; }
+    :host(.theme-dark) .collocation-chip { background: #312e81; border-color: #818cf8; color: #c7d2fe; }
+    :host(.theme-dark) .tab-btn.active { color: #0f172a; }
 
     @media (prefers-reduced-motion: reduce) {
       .popup-container { animation: none; }
       * { transition: none !important; }
     }
   `;
+}
+
+function uniqueItems(items: string[], limit = 10): string[] {
+  return [...new Set(items.map((item) => item.trim()).filter(Boolean))].slice(0, limit);
 }
 
 // Initialize

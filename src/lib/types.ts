@@ -12,6 +12,9 @@ export interface TranslationResult {
   definitions?: { pos: string; meanings: string[] }[];
   examples?: string[];
   synonyms?: string[];
+  collocations?: string[];
+  antonyms?: string[];
+  grammar?: string;
   cached?: boolean;
 }
 
@@ -20,12 +23,16 @@ export interface DictionaryEntry {
   phonetics: {
     ipa: string;
     audioUrl?: string;
+    region?: 'UK' | 'US';
   }[];
   definitions: {
     partOfSpeech: string;
     meaning: string;
     examples: string[];
   }[];
+  examples?: string[];
+  synonyms?: string[];
+  collocations?: string[];
   found: boolean;
 }
 
