@@ -18,6 +18,27 @@ export interface TranslationResult {
   cached?: boolean;
 }
 
+export interface DictionaryDefinition {
+  partOfSpeech: string;
+  meaning: string;
+  examples: string[];
+  labels?: string[];
+  domain?: string;
+}
+
+export interface GrammarInfo {
+  patterns: string[];
+  notes: string[];
+  inflections: string[];
+}
+
+export interface TechnicalUsageItem {
+  term: string;
+  domain: string;
+  meaning?: string;
+  examples?: string[];
+}
+
 export interface DictionaryEntry {
   word: string;
   phonetics: {
@@ -25,14 +46,12 @@ export interface DictionaryEntry {
     audioUrl?: string;
     region?: 'UK' | 'US';
   }[];
-  definitions: {
-    partOfSpeech: string;
-    meaning: string;
-    examples: string[];
-  }[];
+  definitions: DictionaryDefinition[];
   examples?: string[];
   synonyms?: string[];
   collocations?: string[];
+  grammar?: GrammarInfo;
+  technicalUsage?: TechnicalUsageItem[];
   found: boolean;
 }
 
@@ -49,7 +68,6 @@ export interface VocabNote {
 }
 
 export interface Settings {
-  geminiApiKey: string;
   targetLang: string;
   triggerMethod: 'select' | 'double-click';
   theme: 'light' | 'dark' | 'auto';
@@ -57,7 +75,6 @@ export interface Settings {
 }
 
 export const DEFAULT_SETTINGS: Settings = {
-  geminiApiKey: '',
   targetLang: 'vi',
   triggerMethod: 'select',
   theme: 'auto',
@@ -67,8 +84,6 @@ export const DEFAULT_SETTINGS: Settings = {
 // Message types between content script and service worker
 export type MessageType =
   | { type: 'TRANSLATE'; text: string }
-  | { type: 'TRANSLATE_AI'; text: string }
-  | { type: 'TEST_API_KEY'; apiKey: string }
   | { type: 'LOOKUP_DICTIONARY'; word: string }
   | { type: 'SAVE_NOTE'; note: Omit<VocabNote, 'id' | 'createdAt' | 'updatedAt'> }
   | { type: 'GET_NOTES'; query?: string }

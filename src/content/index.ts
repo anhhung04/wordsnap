@@ -335,59 +335,6 @@ async function fetchData(text: string) {
   const dictionary = dictionaryRes.status === 'fulfilled' ? dictionaryRes.value : null;
 
   renderResult(text, translation, dictionary, isWord, isPhrase);
-
-  // Lazy-load AI enhancement if API key is configured
-  loadAiEnhancement(text, isWord, isPhrase, requestId);
-}
-
-async function loadAiEnhancement(text: string, isWord: boolean, isPhrase: boolean, requestId: number) {
-  try {
-    const aiResult = await sendMessage({ type: 'TRANSLATE_AI', text });
-    // Discard if stale
-    if (requestId !== currentRequestId || !aiResult || !shadowRoot) return;
-
-    const ai = aiResult as {
-      translated?: string;
-      explanation?: string;
-      examples?: string[];
-      collocations?: string[];
-      antonyms?: string[];
-      grammar?: string;
-    };
-    const aiSection = shadowRoot.querySelector('.ai-section');
-
-    if (aiSection && ai.translated) {
-      const titleLabel = isWord ? 'AI Word Analysis' : isPhrase ? 'AI Explanation' : 'AI Analysis';
-      const explanationHtml = ai.explanation ? `<div class="explanation">${escapeHtml(ai.explanation)}</div>` : '';
-      const grammarHtml = ai.grammar ? `<div class="ai-meta-line"><span class="ai-meta-label">Grammar:</span><span>${escapeHtml(ai.grammar)}</span></div>` : '';
-      const collocationsHtml = ai.collocations?.length
-        ? `<div class="ai-meta-line"><span class="ai-meta-label">AI Collocations:</span> ${ai.collocations.map((item) => `<span class="ai-meta-chip">${escapeHtml(item)}</span>`).join(' ')}</div>`
-        : '';
-      const antonymsHtml = ai.antonyms?.length
-        ? `<div class="ai-meta-line"><span class="ai-meta-label">Antonyms:</span> ${ai.antonyms.map((item) => `<span class="ai-meta-chip">${escapeHtml(item)}</span>`).join(' ')}</div>`
-        : '';
-
-      aiSection.innerHTML = `
-        <div class="section-title"><svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" style="display:inline;vertical-align:-1px;margin-right:4px"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg>${titleLabel}</div>
-        <div class="translated-text">${escapeHtml(ai.translated)}</div>
-        ${explanationHtml}
-        ${grammarHtml}
-        ${collocationsHtml}
-        ${antonymsHtml}
-        ${ai.examples?.length ? `<div class="ai-details">${ai.examples.map((ex) => `<div class="ai-detail-item">${escapeHtml(ex)}</div>`).join('')}</div>` : ''}
-      `;
-      aiSection.classList.remove('loading-ai');
-      repositionPopup();
-    }
-  } catch {
-    // AI not available - show subtle message instead of removing
-    if (requestId !== currentRequestId) return;
-    const aiSection = shadowRoot?.querySelector('.ai-section');
-    if (aiSection) {
-      aiSection.innerHTML = `<div class="ai-unavailable">AI analysis unavailable</div>`;
-      aiSection.classList.remove('loading-ai');
-    }
-  }
 }
 
 function renderResult(text: string, translation: unknown, dictionary: unknown, isWord: boolean, isPhrase: boolean) {
@@ -409,10 +356,12 @@ function renderResult(text: string, translation: unknown, dictionary: unknown, i
   const d = dictionary as {
     found?: boolean;
     phonetics?: { ipa: string; audioUrl?: string; region?: 'UK' | 'US' }[];
-    definitions?: { partOfSpeech: string; meaning: string; examples: string[] }[];
+    definitions?: { partOfSpeech: string; meaning: string; examples: string[]; labels?: string[]; domain?: string }[];
     examples?: string[];
     synonyms?: string[];
     collocations?: string[];
+    grammar?: { patterns?: string[]; notes?: string[]; inflections?: string[] };
+    technicalUsage?: { term: string; domain: string; meaning?: string; examples?: string[] }[];
   } | null;
 
   // --- Header info (IPA + transliteration + word class for words) ---
@@ -513,6 +462,13 @@ function renderResult(text: string, translation: unknown, dictionary: unknown, i
   const mergedSynonyms = uniqueItems([...(t?.synonyms || []), ...(d?.synonyms || [])], 12);
   const mergedCollocations = uniqueItems([...(t?.collocations || []), ...(d?.collocations || [])], 12);
   const mergedExamples = uniqueItems([...(t?.examples || []), ...(d?.examples || [])], 10);
+  const grammarPatterns = uniqueItems(d?.grammar?.patterns || [], 8);
+  const grammarNotes = uniqueItems([
+    ...(d?.grammar?.notes || []),
+    ...(t?.grammar ? [t.grammar] : []),
+  ], 8);
+  const grammarInflections = uniqueItems(d?.grammar?.inflections || [], 6);
+  const technicalUsage = (d?.technicalUsage || []).slice(0, 8);
 
   let cambridgeDefinitionsHtml = '';
   if (d?.found && d.definitions?.length) {
@@ -546,21 +502,24 @@ function renderResult(text: string, translation: unknown, dictionary: unknown, i
 
   const overviewTabId = 'tab-overview';
   const detailsTabId = 'tab-details';
+  const grammarTabId = 'tab-grammar';
   const synonymsTabId = 'tab-synonyms';
-  const collocationsTabId = 'tab-collocations';
+  const technicalUsageTabId = 'tab-technical-usage';
   const examplesTabId = 'tab-examples';
 
   const overviewPanelId = 'panel-overview';
   const detailsPanelId = 'panel-details';
+  const grammarPanelId = 'panel-grammar';
   const synonymsPanelId = 'panel-synonyms';
-  const collocationsPanelId = 'panel-collocations';
+  const technicalUsagePanelId = 'panel-technical-usage';
   const examplesPanelId = 'panel-examples';
 
   const tabButtons = [
     { id: overviewTabId, label: 'Overview', panelId: overviewPanelId, active: true },
     { id: detailsTabId, label: 'Definitions', panelId: detailsPanelId, active: false },
-    ...(mergedSynonyms.length ? [{ id: synonymsTabId, label: 'Synonyms', panelId: synonymsPanelId, active: false }] : []),
-    ...(mergedCollocations.length ? [{ id: collocationsTabId, label: 'Collocations', panelId: collocationsPanelId, active: false }] : []),
+    { id: grammarTabId, label: 'Grammar', panelId: grammarPanelId, active: false },
+    { id: synonymsTabId, label: 'Synonyms', panelId: synonymsPanelId, active: false },
+    { id: technicalUsageTabId, label: 'Technical Usage', panelId: technicalUsagePanelId, active: false },
     ...(mergedExamples.length ? [{ id: examplesTabId, label: 'Examples', panelId: examplesPanelId, active: false }] : []),
   ];
 
@@ -587,23 +546,67 @@ function renderResult(text: string, translation: unknown, dictionary: unknown, i
     </section>
   `;
 
-  const synonymsPanelHtml = mergedSynonyms.length ? `
-    <section class="tab-panel" id="${synonymsPanelId}" role="tabpanel" aria-labelledby="${synonymsTabId}" hidden>
-      <div class="section synonyms">
-        <div class="section-title">Synonyms</div>
-        <div class="syn-list">${mergedSynonyms.map((s) => `<span class="syn-chip">${escapeHtml(s)}</span>`).join('')}</div>
-      </div>
+  const grammarPanelHtml = `
+    <section class="tab-panel" id="${grammarPanelId}" role="tabpanel" aria-labelledby="${grammarTabId}" hidden>
+      ${grammarInflections.length ? `
+        <div class="section grammar-section">
+          <div class="section-title">Forms & Inflections</div>
+          <div class="syn-list">${grammarInflections.map((item) => `<span class="syn-chip grammar-chip">${escapeHtml(item)}</span>`).join('')}</div>
+        </div>
+      ` : ''}
+      ${grammarPatterns.length ? `
+        <div class="section grammar-section">
+          <div class="section-title">Patterns</div>
+          <div class="examples">${grammarPatterns.map((item) => `<div class="example">${escapeHtml(item)}</div>`).join('')}</div>
+        </div>
+      ` : ''}
+      ${grammarNotes.length ? `
+        <div class="section grammar-section">
+          <div class="section-title">Usage Notes</div>
+          <div class="examples">${grammarNotes.map((item) => `<div class="example">${escapeHtml(item)}</div>`).join('')}</div>
+        </div>
+      ` : ''}
+      ${!grammarInflections.length && !grammarPatterns.length && !grammarNotes.length ? '<div class="section empty-state">No grammar notes were found for this selection.</div>' : ''}
     </section>
-  ` : '';
+  `;
 
-  const collocationsPanelHtml = mergedCollocations.length ? `
-    <section class="tab-panel" id="${collocationsPanelId}" role="tabpanel" aria-labelledby="${collocationsTabId}" hidden>
-      <div class="section collocations-section">
-        <div class="section-title">Collocations</div>
-        <div class="syn-list">${mergedCollocations.map((item) => `<span class="syn-chip collocation-chip">${escapeHtml(item)}</span>`).join('')}</div>
-      </div>
+  const synonymsPanelHtml = `
+    <section class="tab-panel" id="${synonymsPanelId}" role="tabpanel" aria-labelledby="${synonymsTabId}" hidden>
+      ${mergedSynonyms.length ? `
+        <div class="section synonyms">
+          <div class="section-title">Synonyms</div>
+          <div class="syn-list">${mergedSynonyms.map((s) => `<span class="syn-chip">${escapeHtml(s)}</span>`).join('')}</div>
+        </div>
+      ` : ''}
+      ${mergedCollocations.length ? `
+        <div class="section collocations-section">
+          <div class="section-title">Common Phrases</div>
+          <div class="syn-list">${mergedCollocations.map((item) => `<span class="syn-chip collocation-chip">${escapeHtml(item)}</span>`).join('')}</div>
+        </div>
+      ` : ''}
+      ${!mergedSynonyms.length && !mergedCollocations.length ? '<div class="section empty-state">No synonym or phrase suggestions were found for this selection.</div>' : ''}
     </section>
-  ` : '';
+  `;
+
+  const technicalUsagePanelHtml = `
+    <section class="tab-panel" id="${technicalUsagePanelId}" role="tabpanel" aria-labelledby="${technicalUsageTabId}" hidden>
+      ${technicalUsage.length ? `
+        <div class="section technical-usage-section">
+          <div class="section-title">Domain-specific usage</div>
+          <div class="technical-usage-list">${technicalUsage.map((item) => `
+            <div class="technical-card">
+              <div class="technical-card-header">
+                <span class="technical-term">${escapeHtml(item.term)}</span>
+                <span class="technical-domain">${escapeHtml(item.domain)}</span>
+              </div>
+              ${item.meaning ? `<div class="technical-meaning">${escapeHtml(item.meaning)}</div>` : ''}
+              ${item.examples?.length ? `<div class="def-examples">${item.examples.map((example) => `<div class="def-example">${escapeHtml(example)}</div>`).join('')}</div>` : ''}
+            </div>
+          `).join('')}</div>
+        </div>
+      ` : '<div class="section empty-state">No domain-specific technical usage was found from the available dictionary sources.</div>'}
+    </section>
+  `;
 
   const examplesPanelHtml = mergedExamples.length ? `
     <section class="tab-panel" id="${examplesPanelId}" role="tabpanel" aria-labelledby="${examplesTabId}" hidden>
@@ -613,9 +616,6 @@ function renderResult(text: string, translation: unknown, dictionary: unknown, i
       </div>
     </section>
   ` : '';
-
-  // --- AI section placeholder (lazy-loaded) ---
-  const aiHtml = `<div class="section ai-section loading-ai"><div class="ai-loading-hint"><svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" style="display:inline;vertical-align:-1px;margin-right:4px"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg>Loading AI analysis...</div></div>`;
 
   // --- Meta info for long text ---
   let metaHtml = '';
@@ -646,11 +646,11 @@ function renderResult(text: string, translation: unknown, dictionary: unknown, i
         <div class="tab-panels">
           ${overviewPanelHtml}
           ${detailsPanelHtml}
+          ${grammarPanelHtml}
           ${synonymsPanelHtml}
-          ${collocationsPanelHtml}
+          ${technicalUsagePanelHtml}
           ${examplesPanelHtml}
         </div>
-        ${aiHtml}
       </div>
       <div class="popup-footer">
         <button class="save-btn" title="Save to notes"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21H5a2 2 0 01-2-2V5a2 2 0 012-2h11l5 5v11a2 2 0 01-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg> Save</button>
@@ -1039,54 +1039,48 @@ function getStyles(): string {
       border-radius: 6px;
       border: 1px solid #fecaca;
     }
-    .ai-section {
-      border-top: 1px dashed var(--color-border);
-      padding-top: 12px;
-      margin-top: 12px;
+    .grammar-chip {
+      background: #ecfeff;
+      border-color: #a5f3fc;
+      color: #155e75;
     }
-    .ai-loading-hint {
-      font-size: 12px;
-      color: var(--color-text-muted);
+    .technical-usage-list {
+      display: grid;
+      gap: 10px;
     }
-    .loading-ai .ai-loading-hint { display: block; }
-    .ai-section:empty { display: none; }
-    .ai-unavailable {
-      font-size: 12px;
-      color: var(--color-text-muted);
-      font-style: italic;
+    .technical-card {
+      border: 1px solid var(--color-border);
+      background: var(--color-surface);
+      border-radius: 10px;
+      padding: 10px 12px;
     }
-    .ai-details { margin-top: 6px; }
-    .ai-detail-item {
+    .technical-card-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      margin-bottom: 6px;
+    }
+    .technical-term {
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--color-text);
+    }
+    .technical-domain {
+      font-size: 10px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      padding: 2px 8px;
+      border-radius: 999px;
+      background: #ede9fe;
+      border: 1px solid #c4b5fd;
+      color: #6d28d9;
+    }
+    .technical-meaning {
       font-size: 13px;
       color: var(--color-text-secondary);
-      padding: 3px 0;
-      padding-left: 8px;
-      border-left: 2px solid var(--color-border);
-      margin-bottom: 4px;
-    }
-    .ai-meta-line {
-      display: flex;
-      align-items: baseline;
-      flex-wrap: wrap;
-      gap: 4px;
-      margin-top: 6px;
-      font-size: 12px;
-    }
-    .ai-meta-label {
-      font-weight: 600;
-      color: var(--color-text-muted);
-      text-transform: uppercase;
-      font-size: 10px;
-      letter-spacing: 0.04em;
-    }
-    .ai-meta-chip {
-      display: inline-block;
-      font-size: 12px;
-      padding: 1px 8px;
-      border-radius: 10px;
-      background: var(--color-surface);
-      border: 1px solid var(--color-border);
-      color: var(--color-text-secondary);
+      line-height: 1.5;
     }
     .translation-row {
       display: flex;
@@ -1285,6 +1279,8 @@ function getStyles(): string {
     :host(.theme-dark) .alt-chip { background: #1e3a5f; border-color: #2563eb; color: #93c5fd; }
     :host(.theme-dark) .word-class-badge { background: #1e3a5f; border-color: #2563eb; color: #93c5fd; }
     :host(.theme-dark) .collocation-chip { background: #312e81; border-color: #818cf8; color: #c7d2fe; }
+    :host(.theme-dark) .grammar-chip { background: #083344; border-color: #0891b2; color: #a5f3fc; }
+    :host(.theme-dark) .technical-domain { background: #312e81; border-color: #818cf8; color: #c7d2fe; }
     :host(.theme-dark) .tab-btn.active { color: #0f172a; }
 
     @media (prefers-reduced-motion: reduce) {
