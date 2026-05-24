@@ -148,22 +148,16 @@ export async function translate(text: string): Promise<TranslationResult> {
   const wordCount = text.trim().split(/\s+/).length;
   const type: TranslationResult['type'] = wordCount <= 2 ? 'word' : wordCount <= 6 ? 'phrase' : wordCount <= 30 ? 'sentence' : 'paragraph';
 
-  // Build explanation combining explanation + grammar
-  const explanationParts = [parsed.explanation, parsed.grammar].filter(Boolean);
-  const explanation = explanationParts.length ? explanationParts.join(' | ') : undefined;
-
-  // Attach collocations and antonyms as extra metadata via explanation
-  const extras: string[] = [];
-  if (parsed.collocations?.length) extras.push(`Collocations: ${parsed.collocations.join(', ')}`);
-  if (parsed.antonyms?.length) extras.push(`Antonyms: ${parsed.antonyms.join(', ')}`);
-
   const result: TranslationResult = {
     original: text,
     translated: parsed.translated,
     targetLang: settings.targetLang,
     type,
-    explanation: [explanation, ...extras].filter(Boolean).join('\n') || undefined,
+    explanation: parsed.explanation || undefined,
     examples: parsed.examples,
+    collocations: parsed.collocations?.length ? parsed.collocations : undefined,
+    antonyms: parsed.antonyms?.length ? parsed.antonyms : undefined,
+    grammar: parsed.grammar || undefined,
   };
 
   cache.set(cacheKey, result);
