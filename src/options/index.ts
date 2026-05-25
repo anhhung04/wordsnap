@@ -7,12 +7,8 @@ const themeSelect = document.getElementById('theme') as HTMLSelectElement;
 const saveBtn = document.getElementById('saveBtn') as HTMLButtonElement;
 const resetBtn = document.getElementById('resetBtn') as HTMLButtonElement;
 const statusEl = document.getElementById('status') as HTMLElement;
-const notesLink = document.getElementById('notesLink') as HTMLAnchorElement;
 
-notesLink.addEventListener('click', (e) => {
-  e.preventDefault();
-  chrome.tabs.create({ url: chrome.runtime.getURL('notes/index.html') });
-});
+let statusTimeout: ReturnType<typeof setTimeout> | null = null;
 
 async function loadSettings() {
   try {
@@ -36,6 +32,18 @@ function validateSettings(): string | null {
   return null;
 }
 
+function setActionState(isSaving: boolean) {
+  saveBtn.disabled = isSaving;
+  resetBtn.disabled = isSaving;
+  saveBtn.textContent = isSaving ? 'Saving settings...' : 'Save settings';
+}
+
+function applySettingsToForm(settings: Pick<Settings, 'targetLang' | 'triggerMethod' | 'theme'>) {
+  targetLangSelect.value = settings.targetLang;
+  triggerMethodSelect.value = settings.triggerMethod;
+  themeSelect.value = settings.theme;
+}
+
 saveBtn.addEventListener('click', async () => {
   const error = validateSettings();
   if (error) {
@@ -43,8 +51,7 @@ saveBtn.addEventListener('click', async () => {
     return;
   }
 
-  saveBtn.disabled = true;
-  saveBtn.textContent = 'Saving...';
+  setActionState(true);
 
   try {
     const settings: Partial<Settings> = {
@@ -59,40 +66,55 @@ saveBtn.addEventListener('click', async () => {
     });
 
     if (response?.success) {
-      showStatus('Settings saved!', false);
+      showStatus('Settings saved successfully.', false);
     } else {
       showStatus(response?.error || 'Failed to save settings', true);
     }
   } catch (e) {
     showStatus(`Error: ${(e as Error).message}`, true);
   } finally {
-    saveBtn.disabled = false;
-    saveBtn.textContent = 'Save Settings';
+    setActionState(false);
   }
 });
 
 resetBtn.addEventListener('click', async () => {
   if (!confirm('Reset all settings to defaults?')) return;
 
-  targetLangSelect.value = DEFAULT_SETTINGS.targetLang;
-  triggerMethodSelect.value = DEFAULT_SETTINGS.triggerMethod;
-  themeSelect.value = DEFAULT_SETTINGS.theme;
+  setActionState(true);
+  applySettingsToForm(DEFAULT_SETTINGS);
 
-  await chrome.runtime.sendMessage({
-    type: 'UPDATE_SETTINGS',
-    settings: DEFAULT_SETTINGS,
-  });
+  try {
+    const response = await chrome.runtime.sendMessage({
+      type: 'UPDATE_SETTINGS',
+      settings: DEFAULT_SETTINGS,
+    });
 
-  showStatus('Settings reset to defaults', false);
+    if (response?.success) {
+      showStatus('Default settings restored.', false);
+    } else {
+      applySettingsToForm(DEFAULT_SETTINGS);
+      showStatus(response?.error || 'Failed to reset settings', true);
+    }
+  } catch (e) {
+    applySettingsToForm(DEFAULT_SETTINGS);
+    showStatus(`Error: ${(e as Error).message}`, true);
+  } finally {
+    setActionState(false);
+  }
 });
 
 function showStatus(message: string, isError: boolean) {
+  if (statusTimeout) {
+    clearTimeout(statusTimeout);
+  }
+
   statusEl.textContent = message;
   statusEl.className = isError ? 'status error' : 'status';
-  statusEl.style.display = 'block';
-  setTimeout(() => {
-    statusEl.style.display = 'none';
-  }, 3000);
+  statusEl.dataset.visible = 'true';
+
+  statusTimeout = setTimeout(() => {
+    statusEl.dataset.visible = 'false';
+  }, 3200);
 }
 
 loadSettings();

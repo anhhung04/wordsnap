@@ -26,7 +26,7 @@ function copyExtensionFiles() {
       }
 
       // Move HTML files from dist/src/* to dist/* and fix paths
-      for (const page of ['options', 'notes']) {
+      for (const page of ['options']) {
         const srcHtml = resolve(distDir, `src/${page}/index.html`);
         const destDir = resolve(distDir, page);
         const destHtml = resolve(destDir, 'index.html');
@@ -59,11 +59,10 @@ export default defineConfig({
         content: resolve(__dirname, 'src/content/index.ts'),
         background: resolve(__dirname, 'src/background/index.ts'),
         options: resolve(__dirname, 'src/options/index.html'),
-        notes: resolve(__dirname, 'src/notes/index.html'),
       },
       output: {
         entryFileNames: (chunkInfo) => {
-          if (chunkInfo.name === 'options' || chunkInfo.name === 'notes') {
+          if (chunkInfo.name === 'options') {
             return '[name]/index.js';
           }
           return '[name].js';
