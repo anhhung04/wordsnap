@@ -1,4 +1,4 @@
-name: Build & Pack Extension
+﻿name: Build & Pack Extension
 
 on:
   push:
@@ -40,14 +40,23 @@ jobs:
             exit 0
           fi
           echo "$EXTENSION_KEY" > key.pem
-          npx crx pack dist -o wordsnap.crx -p key.pem
+          npx crx pack dist/chrome -o wordsnap.crx -p key.pem
           rm key.pem
+
+      - name: Pack Firefox artifact
+        run: cd dist/firefox && zip -r ../../wordsnap-firefox.xpi .
 
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
         with:
           name: wordsnap-dist
           path: dist/
+
+      - name: Upload Firefox artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: wordsnap-firefox
+          path: wordsnap-firefox.xpi
 
       - name: Upload CRX artifact
         if: env.EXTENSION_KEY != ''
@@ -68,20 +77,39 @@ jobs:
     steps:
       - uses: actions/download-artifact@v4
         with:
-          name: wordsnap-crx
+          name: wordsnap-dist
+          path: dist/
 
       - uses: actions/download-artifact@v4
         with:
-          name: wordsnap-dist
-          path: dist/
+          name: wordsnap-firefox
+
+      - uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          name: wordsnap-crx
 
       - name: Zip dist
         run: cd dist && zip -r ../wordsnap.zip .
 
+      - name: Collect release files
+        id: release_files
+        shell: bash
+        run: |
+          files=()
+          for file in wordsnap.zip wordsnap-firefox.xpi wordsnap.crx; do
+            if [ -f "$file" ]; then
+              files+=("$file")
+            fi
+          done
+          {
+            echo 'files<<EOF'
+            printf '%s\n' "${files[@]}"
+            echo 'EOF'
+          } >> "$GITHUB_OUTPUT"
+
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
-          files: |
-            wordsnap.crx
-            wordsnap.zip
+          files: ${{ steps.release_files.outputs.files }}
           generate_release_notes: true

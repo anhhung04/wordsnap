@@ -4,8 +4,7 @@
   "version": "1.0.0",
   "description": "Lightweight popup translation with Cambridge-backed dictionary details",
   "permissions": [
-    "storage",
-    "activeTab"
+    "storage"
   ],
   "host_permissions": [
     "https://translate.google.com/*",

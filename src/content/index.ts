@@ -1,4 +1,5 @@
 import type { MessageType, Settings } from '@/lib/types';
+import { sendRuntimeMessage } from '@/lib/extension-api';
 
 let triggerEl: HTMLElement | null = null;
 let popupEl: HTMLElement | null = null;
@@ -953,19 +954,7 @@ function trapFocus(event: KeyboardEvent) {
 
 
 async function sendMessage(message: MessageType): Promise<unknown> {
-  return new Promise((resolve, reject) => {
-    chrome.runtime.sendMessage(message, (response) => {
-      if (chrome.runtime.lastError) {
-        reject(new Error(chrome.runtime.lastError.message));
-        return;
-      }
-      if (response?.success) {
-        resolve(response.data);
-      } else {
-        reject(new Error(response?.error || 'Unknown error'));
-      }
-    });
-  });
+  return sendRuntimeMessage(message);
 }
 
 function escapeHtml(str: string): string {

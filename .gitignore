@@ -30,3 +30,4 @@ key.pub
 # Build artifacts
 *.crx
 *.zip
+*.xpi

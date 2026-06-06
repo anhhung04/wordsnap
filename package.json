@@ -1,15 +1,21 @@
 {
   "name": "wordsnap",
   "version": "1.0.0",
-  "description": "Lightweight Chrome extension for English learning — popup translation with AI + Cambridge Dictionary and vocabulary notes",
+  "description": "Cross-browser popup translation extension for English learning",
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "vite build --watch",
-    "build": "tsc --noEmit && vite build",
+    "dev": "vite build --watch --mode chrome",
+    "dev:firefox": "vite build --watch --mode firefox",
+    "build": "npm run typecheck && npm run build:chrome:bundle && npm run build:firefox:bundle",
+    "bundle": "node scripts/bundle.mjs",
+    "build:chrome": "npm run typecheck && npm run build:chrome:bundle",
+    "build:chrome:bundle": "vite build --mode chrome",
+    "build:firefox": "npm run typecheck && npm run build:firefox:bundle",
+    "build:firefox:bundle": "vite build --mode firefox",
     "typecheck": "tsc --noEmit",
     "lint": "eslint src --ext .ts",
-    "clean": "rm -rf dist"
+    "clean": "node -e \"require('fs').rmSync('dist', { recursive: true, force: true })\""
   },
   "devDependencies": {
     "@types/chrome": "^0.0.268",

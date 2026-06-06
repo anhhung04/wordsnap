@@ -2,6 +2,12 @@ import { googleTranslate } from '@/lib/google-translate';
 import { lookupWord as lookupCambridge } from '@/lib/cambridge';
 import { lookupWord as lookupLongman } from '@/lib/longman';
 import { saveNote, getNotes, deleteNote } from '@/lib/db';
+import {
+  openOptionsPage,
+  runtime,
+  type RuntimeInstalledDetails,
+  type RuntimeMessageSender,
+} from '@/lib/extension-api';
 import { getSettings, updateSettings } from '@/lib/storage';
 import {
   SOURCE_PRIORITY,
@@ -14,8 +20,8 @@ import {
   type RichDictionaryEntry,
 } from '@/lib/types';
 
-chrome.runtime.onMessage.addListener(
-  (message: MessageType, _sender: chrome.runtime.MessageSender, sendResponse: (response: MessageResponse) => void) => {
+runtime.onMessage.addListener(
+  (message: MessageType, _sender: RuntimeMessageSender, sendResponse: (response: MessageResponse) => void) => {
     handleMessage(message).then(sendResponse).catch((err) => {
       sendResponse({ success: false, error: err.message || 'Unknown error' });
     });
@@ -415,8 +421,8 @@ function dedupeBy<T>(items: T[], keySelector: (item: T) => string): T[] {
   return out;
 }
 
-chrome.runtime.onInstalled.addListener((details: chrome.runtime.InstalledDetails) => {
+runtime.onInstalled.addListener((details: RuntimeInstalledDetails) => {
   if (details.reason === 'install') {
-    chrome.runtime.openOptionsPage();
+    void openOptionsPage();
   }
 });

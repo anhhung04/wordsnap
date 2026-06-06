@@ -1,5 +1,6 @@
 import type { Settings } from '@/lib/types';
 import { DEFAULT_SETTINGS } from '@/lib/types';
+import { sendRuntimeMessage } from '@/lib/extension-api';
 
 const targetLangSelect = document.getElementById('targetLang') as HTMLSelectElement;
 const triggerMethodSelect = document.getElementById('triggerMethod') as HTMLSelectElement;
@@ -12,13 +13,10 @@ let statusTimeout: ReturnType<typeof setTimeout> | null = null;
 
 async function loadSettings() {
   try {
-    const response = await chrome.runtime.sendMessage({ type: 'GET_SETTINGS' });
-    if (response?.success) {
-      const settings = response.data as Settings;
-      targetLangSelect.value = settings.targetLang;
-      triggerMethodSelect.value = settings.triggerMethod;
-      themeSelect.value = settings.theme;
-    }
+    const settings = await sendRuntimeMessage<Settings>({ type: 'GET_SETTINGS' });
+    targetLangSelect.value = settings.targetLang;
+    triggerMethodSelect.value = settings.triggerMethod;
+    themeSelect.value = settings.theme;
   } catch (e) {
     showStatus(`Failed to load settings: ${(e as Error).message}`, true);
   }
@@ -60,16 +58,12 @@ saveBtn.addEventListener('click', async () => {
       theme: themeSelect.value as Settings['theme'],
     };
 
-    const response = await chrome.runtime.sendMessage({
+    await sendRuntimeMessage<Settings>({
       type: 'UPDATE_SETTINGS',
       settings,
     });
 
-    if (response?.success) {
-      showStatus('Settings saved successfully.', false);
-    } else {
-      showStatus(response?.error || 'Failed to save settings', true);
-    }
+    showStatus('Settings saved successfully.', false);
   } catch (e) {
     showStatus(`Error: ${(e as Error).message}`, true);
   } finally {
@@ -84,17 +78,12 @@ resetBtn.addEventListener('click', async () => {
   applySettingsToForm(DEFAULT_SETTINGS);
 
   try {
-    const response = await chrome.runtime.sendMessage({
+    await sendRuntimeMessage<Settings>({
       type: 'UPDATE_SETTINGS',
       settings: DEFAULT_SETTINGS,
     });
 
-    if (response?.success) {
-      showStatus('Default settings restored.', false);
-    } else {
-      applySettingsToForm(DEFAULT_SETTINGS);
-      showStatus(response?.error || 'Failed to reset settings', true);
-    }
+    showStatus('Default settings restored.', false);
   } catch (e) {
     applySettingsToForm(DEFAULT_SETTINGS);
     showStatus(`Error: ${(e as Error).message}`, true);
